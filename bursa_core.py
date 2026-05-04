@@ -114,12 +114,15 @@ def get_stock_data(ticker, period="1y"):
             intra_kl = intra.copy()
             intra_kl.index = intra_kl.index.tz_convert("Asia/Kuala_Lumpur")
             day = intra_kl.index[-1].normalize()
+            intra_day = intra_kl[intra_kl.index.normalize() == day]
+            if intra_day is None or intra_day.empty:
+                return df
 
-            o = float(intra_kl["Open"].iloc[0])
-            h = float(pd.to_numeric(intra_kl["High"], errors="coerce").max())
-            l = float(pd.to_numeric(intra_kl["Low"], errors="coerce").min())
-            c = float(intra_kl["Close"].iloc[-1])
-            v = float(pd.to_numeric(intra_kl["Volume"], errors="coerce").fillna(0).sum())
+            o = float(intra_day["Open"].iloc[0])
+            h = float(pd.to_numeric(intra_day["High"], errors="coerce").max())
+            l = float(pd.to_numeric(intra_day["Low"], errors="coerce").min())
+            c = float(intra_day["Close"].iloc[-1])
+            v = float(pd.to_numeric(intra_day["Volume"], errors="coerce").fillna(0).sum())
             if not all(x == x for x in [o, h, l, c]):
                 return df
 
