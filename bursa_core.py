@@ -35,95 +35,63 @@ except Exception:
 
 # --- KNOWLEDGE BASE: LATEST MARKET INSIGHTS (MAY 2026) ---
 MARKET_INSIGHTS = {
-    "1155.KL": {
-        "code": "1155",
-        "name": "MAYBANK",
-        "sector": "Banking",
-        "analysis": "Strong defensive play with attractive dividends. Stable base for FBM KLCI.",
-        "catalyst": "High interest rate environment and digital banking growth."
-    },
-    "5347.KL": {
-        "code": "5347",
-        "name": "TNB",
-        "sector": "Utilities",
-        "analysis": "Top pick for FY26. Grid investments and renewable energy leadership.",
-        "catalyst": "National Energy Transition Roadmap (NETR) and rising regulated asset base."
-    },
-    "5246.KL": {
-        "code": "5246",
-        "name": "WESTPORTS",
-        "sector": "Transportation",
-        "analysis": "Proxy for global trade recovery. Tariff revisions improve margins.",
-        "catalyst": "Normalization of global trade and resilient intra-Asia volumes."
-    },
-    "7148.KL": {
-        "code": "7148",
-        "name": "DPHARMA",
-        "sector": "Healthcare",
-        "analysis": "Margin expansion due to stronger Ringgit (lower import costs for APIs).",
-        "catalyst": "Increased public healthcare spending and medical tourism surge."
-    },
-    "5099.KL": {
-        "code": "5099",
-        "name": "CAPITALA",
-        "sector": "Aviation/Tourism",
-        "analysis": "Primary proxy for Visit Malaysia Year 2026 (VMY2026). Formerly AirAsia.",
-        "catalyst": "Tourism surge and improved flight connectivity."
-    },
-    "1023.KL": {
-        "code": "1023",
-        "name": "CIMB",
-        "sector": "Banking",
-        "analysis": "Leading ASEAN focused bank. Strong earnings growth and ROE expansion.",
-        "catalyst": "Normalization of credit costs and strong non-interest income growth."
-    },
-    "1082.KL": {
-        "code": "1082",
-        "name": "HLFG",
-        "sector": "Banking",
-        "analysis": "Undervalued financial holding company. Strong contribution from Hong Leong Bank.",
-        "catalyst": "Undemanding price-to-book value and strong asset quality of subsidiaries."
-    },
-    "FKLI=F": {
-        "code": "FKLI",
-        "name": "KLCI FUTURES",
-        "sector": "Futures",
-        "analysis": "Proxy for the underlying FBM KLCI index.",
-        "catalyst": "Market sentiment and index component performance."
-    },
-    "FCPO=F": {
-        "code": "FCPO",
-        "name": "CPO FUTURES",
-        "sector": "Futures",
-        "analysis": "Global benchmark for Crude Palm Oil prices.",
-        "catalyst": "Supply/demand in edible oils and biodiesel policy."
-    },
-    "FM70=F": {
-        "code": "FM70",
-        "name": "MID 70 FUTURES",
-        "sector": "Futures",
-        "analysis": "Proxy for the FBM Mid 70 Index.",
-        "catalyst": "Mid-cap market momentum."
-    }
+    "1155.KL": {"code": "1155", "name": "MAYBANK", "sector": "Banking", "analysis": "Strong defensive play with attractive dividends.", "catalyst": "High interest rate environment."},
+    "1295.KL": {"code": "1295", "name": "PBBANK", "sector": "Banking", "analysis": "Strong asset quality and consistent dividends.", "catalyst": "Economic recovery proxy."},
+    "1023.KL": {"code": "1023", "name": "CIMB", "sector": "Banking", "analysis": "Leading ASEAN focused bank. Strong earnings growth.", "catalyst": "Regional growth momentum."},
+    "5347.KL": {"code": "5347", "name": "TNB", "sector": "Utilities", "analysis": "Top pick for FY26. Grid investments and renewable energy.", "catalyst": "National Energy Transition Roadmap (NETR)."},
+    "5183.KL": {"code": "5183", "name": "PCHEM", "sector": "Chemicals", "analysis": "Proxy for global economic recovery and oil prices.", "catalyst": "Product price stabilization."},
+    "5225.KL": {"code": "5225", "name": "IHH", "sector": "Healthcare", "analysis": "Global healthcare leader with strong expansion plans.", "catalyst": "Medical tourism and aging population."},
+    "6947.KL": {"code": "6947", "name": "DIGI", "sector": "Telecommunications", "analysis": "Post-merger synergies and 5G leadership.", "catalyst": "Digital economy growth."},
+    "6888.KL": {"code": "6888", "name": "AXIATA", "sector": "Telecommunications", "analysis": "Regional footprint and digital assets expansion.", "catalyst": "TowerCo monetization."},
+    "6012.KL": {"code": "6012", "name": "MAXIS", "sector": "Telecommunications", "analysis": "Strong mobile market share and 5G rollout.", "catalyst": "Enterprise digital transformation."},
+    "5819.KL": {"code": "5819", "name": "HLBANK", "sector": "Banking", "analysis": "Excellent asset quality and cost management.", "catalyst": "Mortgage and SME loan growth."},
+    "8869.KL": {"code": "8869", "name": "PGENE", "sector": "Utilities", "analysis": "Stable earnings from power generation.", "catalyst": "New PPA agreements."},
+    "6033.KL": {"code": "6033", "name": "PETGAS", "sector": "Utilities", "analysis": "Defensive play with high yields.", "catalyst": "Regulated asset base growth."},
+    "3816.KL": {"code": "3816", "name": "MISC", "sector": "Transportation", "analysis": "Long-term charter contracts provide stability.", "catalyst": "Global energy demand."},
+    "1066.KL": {"code": "1066", "name": "RHBBANK", "sector": "Banking", "analysis": "Attractive dividend yields and digital banking.", "catalyst": "Transformation program success."},
+    "4707.KL": {"code": "4707", "name": "NESTLE", "sector": "Consumer", "analysis": "Resilient demand for essential products.", "catalyst": "Input cost normalization."},
+    "1961.KL": {"code": "1961", "name": "IOICORP", "sector": "Plantation", "analysis": "Efficient producer with strong integrated operations.", "catalyst": "CPO price support."},
+    "2445.KL": {"code": "2445", "name": "KLK", "sector": "Plantation", "analysis": "Leading plantation group with strong downstream.", "catalyst": "Upstream production growth."},
+    "4065.KL": {"code": "4065", "name": "PPB", "sector": "Consumer", "analysis": "Strong contribution from Wilmar and flour business.", "catalyst": "Food security themes."},
+    "3182.KL": {"code": "3182", "name": "GENTING", "sector": "Tourism", "analysis": "Proxy for global travel recovery.", "catalyst": "Resorts World Las Vegas performance."},
+    "4715.KL": {"code": "4715", "name": "GENM", "sector": "Tourism", "analysis": "Direct beneficiary of Visit Malaysia Year 2026.", "catalyst": "Increased tourist arrivals."},
+    "7277.KL": {"code": "7277", "name": "DIALOG", "sector": "Oil & Gas", "analysis": "Strong recurring income from storage assets.", "catalyst": "Pengerang Phase 3 development."},
+    "4197.KL": {"code": "4197", "name": "SIME", "sector": "Conglomerate", "analysis": "Strong automotive and heavy equipment division.", "catalyst": "EV market expansion."},
+    "5285.KL": {"code": "5285", "name": "SIMEPLT", "sector": "Plantation", "analysis": "World's largest producer of certified sustainable CPO.", "catalyst": "ESG leadership and yield recovery."},
+    "5681.KL": {"code": "5681", "name": "PETDAG", "sector": "Retail", "analysis": "Dominant market share in retail fuel.", "catalyst": "Domestic travel volume."},
+    "1015.KL": {"code": "1015", "name": "AMBANK", "sector": "Banking", "analysis": "Corporate banking strength and cost discipline.", "catalyst": "Asset quality improvement."},
+    "1082.KL": {"code": "1082", "name": "HLFG", "sector": "Banking", "analysis": "Undervalued financial holding company.", "catalyst": "Subsidiaries' strong performance."},
+    "0166.KL": {"code": "0166", "name": "INARI", "sector": "Technology", "analysis": "Proxy for global 5G and AI smartphone cycle.", "catalyst": "New product launches by key customers."},
+    "5296.KL": {"code": "5296", "name": "MRDIY", "sector": "Consumer", "analysis": "Aggressive store expansion and resilient demand.", "catalyst": "Inflationary environment beneficiary."},
+    "5246.KL": {"code": "5246", "name": "WESTPORTS", "sector": "Transportation", "analysis": "Proxy for global trade recovery.", "catalyst": "Port expansion plans."},
+    "4677.KL": {"code": "4677", "name": "YTL", "sector": "Conglomerate", "analysis": "Strong performance from utility and data center divisions.", "catalyst": "AI data center development."},
+    "7148.KL": {"code": "7148", "name": "DPHARMA", "sector": "Healthcare", "analysis": "Strong local pharmaceutical market share.", "catalyst": "Public healthcare spending."},
+    "5099.KL": {"code": "5099", "name": "CAPITALA", "sector": "Aviation", "analysis": "Proxy for regional travel surge.", "catalyst": "AirAsia recovery and digital assets."},
+    "FKLI=F": {"code": "FKLI", "name": "KLCI FUTURES", "sector": "Futures", "analysis": "Proxy for the underlying FBM KLCI index.", "catalyst": "Market sentiment."},
+    "FCPO=F": {"code": "FCPO", "name": "CPO FUTURES", "sector": "Futures", "analysis": "Global benchmark for Crude Palm Oil.", "catalyst": "Supply/demand in edible oils."},
+    "FM70=F": {"code": "FM70", "name": "MID 70 FUTURES", "sector": "Futures", "analysis": "Proxy for the FBM Mid 70 Index.", "catalyst": "Mid-cap market momentum."}
 }
 
 def get_stock_data(ticker, period="1y"):
     """
     Fetches historical stock data from Yahoo Finance.
-    Handles alternative symbols for futures.
+    Handles alternative symbols for futures and prioritizes knowledge base names.
     """
     ALT_SYMBOLS = {
         "FKLI=F": ["0001.KL", "FKLI=F", "KLI=F", "^KLCI"],
         "FCPO=F": ["CPO=F", "FCPO=F", "FCP.KL"],
-        "FM70=F": ["^KL70", "FM70=F"]
+        "FM70=F": ["^KL70", "FM70=F", "0002.KL"]
     }
     
     symbols_to_try = ALT_SYMBOLS.get(ticker, [ticker])
     
+    # Prioritize name from knowledge base
+    base_name = ticker
+    if ticker in MARKET_INSIGHTS:
+        base_name = MARKET_INSIGHTS[ticker]['name']
+    
     for symbol in symbols_to_try:
         try:
-            # Using yfinance's Ticker directly without explicit session
-            # but ensuring we don't use cache if possible
             stock = yf.Ticker(symbol)
             df = stock.history(period=period)
             
@@ -131,16 +99,18 @@ def get_stock_data(ticker, period="1y"):
                 df = stock.history(period="1mo")
             
             if not df.empty:
-                name = symbol
-                try:
-                    name = stock.info.get('shortName') or stock.info.get('longName') or symbol
-                except:
-                    if ticker in MARKET_INSIGHTS:
-                        name = MARKET_INSIGHTS[ticker]['name']
+                name = base_name
+                # Only try yfinance info if we don't have a good name yet or if it's a new symbol
+                if name == ticker or ".KL" in name:
+                    try:
+                        yf_info = stock.info
+                        name = yf_info.get('shortName') or yf_info.get('longName') or name
+                    except:
+                        pass
                 return df, name
         except Exception:
             continue
-    return None, ticker
+    return None, base_name
 
 def analyze_breakout(ticker, df, resolved_name=None):
     """
@@ -173,7 +143,7 @@ def analyze_breakout(ticker, df, resolved_name=None):
     if is_volume_surge: score += 2
     if is_price_break: score += 2
     
-    # Qualitative Cross-Reference
+    # Qualitative Cross-Reference (Priority 1: Knowledge Base)
     insight = MARKET_INSIGHTS.get(ticker)
     if insight:
         name = insight["name"]
@@ -181,10 +151,15 @@ def analyze_breakout(ticker, df, resolved_name=None):
         analysis = insight["analysis"]
         catalyst = insight["catalyst"]
     else:
+        # Priority 2: Resolved name from yfinance or symbol cleaning
         name = resolved_name or ticker.replace(".KL", "")
         code = ticker.split(".")[0]
         analysis = "Technical breakout analysis based on live data."
         catalyst = "Market momentum / Trend following."
+    
+    # Final name cleanup: If name is still a ticker code like "6888.KL", clean it
+    if ".KL" in name and len(name) <= 10:
+        name = name.replace(".KL", "")
     
     return {
         "ticker": ticker,
