@@ -113,7 +113,27 @@ def get_stock_data(ticker, period="1y"):
     ticker = ticker.upper().strip()
 
     if ticker == "FKLI=F":
+        df = None
+        try:
+            stock = yf.Ticker("^KLSE")
+            df = stock.history(period=period)
+            if df.empty and period != "1mo":
+                df = stock.history(period="1mo")
+        except Exception:
+            df = None
+
         price = _tradingview_last_price_myr("MYX-FKLI1!")
+        if df is not None and not df.empty:
+            if price is not None:
+                try:
+                    df = df.copy()
+                    df.iloc[-1, df.columns.get_loc("Close")] = price
+                    for c in ["Open", "High", "Low"]:
+                        if c in df.columns and pd.isna(df[c].iloc[-1]):
+                            df.iloc[-1, df.columns.get_loc(c)] = price
+                except Exception:
+                    pass
+            return df, MARKET_INSIGHTS.get("FKLI=F", {}).get("name", "KLCI FUTURES")
         if price is not None:
             return _synthetic_price_df(price), MARKET_INSIGHTS.get("FKLI=F", {}).get("name", "KLCI FUTURES")
 

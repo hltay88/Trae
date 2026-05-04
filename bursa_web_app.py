@@ -2,6 +2,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 from urllib.parse import quote
+import streamlit.components.v1 as components
 from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, search_bursa, get_top_breakouts, KLCI_COMPONENTS, get_futures_breakouts
 
 # --- PAGE CONFIG ---
@@ -22,11 +23,69 @@ def _get_query_param(name: str):
 
 
 def _render_chart(symbol: str):
+    def _clean_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return df
+
+        cols = [c for c in ["Open", "High", "Low", "Close"] if c in df.columns]
+        if cols:
+            df = df.dropna(subset=cols)
+
+        if "Close" in df.columns:
+            df = df[pd.to_numeric(df["Close"], errors="coerce").fillna(0) > 0]
+
+        if "Volume" in df.columns and len(df) >= 2:
+            try:
+                v_last = float(df["Volume"].iloc[-1])
+                v_prev = float(df["Volume"].iloc[-2])
+                if v_last == 0.0 and v_prev > 0.0:
+                    df = df.iloc[:-1]
+            except Exception:
+                pass
+
+        return df
+
+    def _render_tradingview(symbol_tv: str, height: int = 720):
+        html = f"""
+<div class="tradingview-widget-container">
+  <div id="tradingview_widget"></div>
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <script type="text/javascript">
+  new TradingView.widget({{
+    "autosize": true,
+    "symbol": "{symbol_tv}",
+    "interval": "D",
+    "timezone": "Asia/Kuala_Lumpur",
+    "theme": "dark",
+    "style": "1",
+    "locale": "en",
+    "enable_publishing": false,
+    "hide_side_toolbar": false,
+    "allow_symbol_change": true,
+    "save_image": false,
+    "container_id": "tradingview_widget"
+  }});
+  </script>
+</div>
+"""
+        components.html(html, height=height, scrolling=False)
+
+    if symbol.endswith(".KL"):
+        _render_tradingview(f"MYX:{symbol.replace('.KL', '')}")
+        return
+
+    if symbol in {"FKLI=F", "FCPO=F"}:
+        tv_map = {"FKLI=F": "MYX:FKLI1!", "FCPO=F": "MYX:FCPO1!"}
+        _render_tradingview(tv_map[symbol])
+        return
+
     df_chart, name_chart = get_stock_data(symbol, period="5y")
 
     if df_chart is None or df_chart.empty:
         st.warning(f"5-year data unavailable for {symbol}. Trying 1-year data...")
         df_chart, name_chart = get_stock_data(symbol, period="1y")
+
+    df_chart = _clean_ohlcv(df_chart)
 
     if df_chart is None or df_chart.empty:
         st.error(f"Could not load any historical data for {symbol}.")
