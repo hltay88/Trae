@@ -34,6 +34,21 @@ def _render_chart(symbol: str):
         except Exception:
             return False
 
+    def _tradingview_url(sym: str) -> str | None:
+        try:
+            s = str(sym).upper().strip()
+            tv_map = {"FKLI=F": "MYX:FKLI1!", "FCPO=F": "MYX:FCPO1!"}
+            if s in tv_map:
+                tv_symbol = tv_map[s]
+            elif s.endswith(".KL"):
+                code = s.split(".")[0]
+                tv_symbol = f"MYX:{code}"
+            else:
+                return None
+            return f"https://www.tradingview.com/chart/?symbol={quote(tv_symbol, safe='')}"
+        except Exception:
+            return None
+
     def _clean_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
         if df is None or df.empty:
             return df
@@ -84,9 +99,16 @@ def _render_chart(symbol: str):
 
     if symbol in {"FKLI=F", "FCPO=F"}:
         tv_map = {"FKLI=F": "MYX:FKLI1!", "FCPO=F": "MYX:FCPO1!"}
+        tv_url = _tradingview_url(symbol)
+        if tv_url:
+            st.markdown(f"[Open this chart in TradingView (live)]({tv_url})")
         _render_tradingview(tv_map[symbol])
         st.caption("If the chart is blank, click the TradingView logo to open the full chart on TradingView.")
         return
+
+    tv_url = _tradingview_url(symbol)
+    if tv_url:
+        st.markdown(f"[Open this chart in TradingView (live)]({tv_url})")
 
     df_chart, name_chart = get_stock_data(symbol, period="5y")
 
