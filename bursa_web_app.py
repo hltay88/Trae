@@ -23,6 +23,17 @@ def _get_query_param(name: str):
 
 
 def _render_chart(symbol: str):
+    def _is_today_kl(ts) -> bool:
+        try:
+            t = pd.Timestamp(ts)
+            if t.tz is None:
+                t = t.tz_localize("Asia/Kuala_Lumpur")
+            else:
+                t = t.tz_convert("Asia/Kuala_Lumpur")
+            return t.normalize() == pd.Timestamp.now(tz="Asia/Kuala_Lumpur").normalize()
+        except Exception:
+            return False
+
     def _clean_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
         if df is None or df.empty:
             return df
@@ -38,7 +49,7 @@ def _render_chart(symbol: str):
             try:
                 v_last = float(df["Volume"].iloc[-1])
                 v_prev = float(df["Volume"].iloc[-2])
-                if v_last == 0.0 and v_prev > 0.0:
+                if v_last == 0.0 and v_prev > 0.0 and not _is_today_kl(df.index[-1]):
                     df = df.iloc[:-1]
             except Exception:
                 pass
@@ -103,6 +114,13 @@ def _render_chart(symbol: str):
     if plot_df.empty:
         st.error("Historical price data is too short for charting.")
         return
+
+    try:
+        plot_df = plot_df.copy()
+        if plot_df.index.tz is not None:
+            plot_df.index = plot_df.index.tz_convert("Asia/Kuala_Lumpur").tz_localize(None)
+    except Exception:
+        pass
 
     fig = go.Figure()
     fig.add_trace(

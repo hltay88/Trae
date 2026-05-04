@@ -1,41 +1,24 @@
-import yfinance as yf
+import os
 import pandas as pd
-from ta.momentum import RSIIndicator
-from ta.trend import SMAIndicator
 import datetime
 import requests
 import re
 
-# Disable yfinance cache to avoid database errors
+cache_path = os.path.join(os.getcwd(), ".yfinance_cache")
+if os.environ.get("STREAMLIT_SERVER_PORT") or not os.access(os.getcwd(), os.W_OK):
+    cache_path = "/tmp/.yfinance_cache"
 try:
-    import yfinance as yf
-    import os
-    
-    # On Streamlit Cloud or Linux, use /tmp for cache if current dir is not writable
-    cache_path = os.path.join(os.getcwd(), ".yfinance_cache")
-    
-    # Check if we are on Streamlit Cloud
-    if os.environ.get('STREAMLIT_SERVER_PORT') or not os.access(os.getcwd(), os.W_OK):
-        cache_path = "/tmp/.yfinance_cache"
-        
-    if not os.path.exists(cache_path):
-        try:
-            os.makedirs(cache_path, exist_ok=True)
-        except:
-            pass
-    
-    # CRITICAL: Completely disable cache if it causes issues, or set to writable path
-    try:
-        yf.set_tz_cache_location(cache_path)
-    except Exception:
-        try:
-            # Fallback: Disable cache entirely to avoid peewee errors
-            import yfinance.cache as yf_cache
-            yf_cache._db.close()
-        except:
-            pass
-    
-    os.environ['YFINANCE_CACHE_DIR'] = cache_path
+    os.makedirs(cache_path, exist_ok=True)
+except Exception:
+    pass
+os.environ["YFINANCE_CACHE_DIR"] = cache_path
+
+import yfinance as yf
+from ta.momentum import RSIIndicator
+from ta.trend import SMAIndicator
+
+try:
+    yf.set_tz_cache_location(cache_path)
 except Exception:
     pass
 
@@ -112,28 +95,93 @@ def get_stock_data(ticker, period="1y"):
     """
     ticker = ticker.upper().strip()
 
+    def _merge_intraday_daily(df: pd.DataFrame, stock_obj):
+        try:
+            intra = None
+            for interval in ["5m", "15m", "30m", "60m"]:
+                try:
+                    intra = stock_obj.history(period="5d", interval=interval)
+                    if intra is not None and not intra.empty:
+                        break
+                except Exception:
+                    intra = None
+            if intra is None or intra.empty:
+                return df
+            if not all(c in intra.columns for c in ["Open", "High", "Low", "Close", "Volume"]):
+                return df
+            if intra.index.tz is None:
+                intra.index = intra.index.tz_localize("UTC")
+            intra_kl = intra.copy()
+            intra_kl.index = intra_kl.index.tz_convert("Asia/Kuala_Lumpur")
+            day = intra_kl.index[-1].normalize()
+
+            o = float(intra_kl["Open"].iloc[0])
+            h = float(pd.to_numeric(intra_kl["High"], errors="coerce").max())
+            l = float(pd.to_numeric(intra_kl["Low"], errors="coerce").min())
+            c = float(intra_kl["Close"].iloc[-1])
+            v = float(pd.to_numeric(intra_kl["Volume"], errors="coerce").fillna(0).sum())
+            if not all(x == x for x in [o, h, l, c]):
+                return df
+
+            ts = pd.Timestamp(day)
+            if ts.tz is None:
+                ts = ts.tz_localize("Asia/Kuala_Lumpur")
+            else:
+                ts = ts.tz_convert("Asia/Kuala_Lumpur")
+            if df.index.tz is None:
+                df = df.copy()
+                df.index = df.index.tz_localize("Asia/Kuala_Lumpur")
+            else:
+                df = df.copy()
+                df.index = df.index.tz_convert("Asia/Kuala_Lumpur")
+
+            row = {
+                "Open": o,
+                "High": h,
+                "Low": l,
+                "Close": c,
+                "Volume": v,
+            }
+            if "Dividends" in df.columns:
+                row["Dividends"] = 0.0
+            if "Stock Splits" in df.columns:
+                row["Stock Splits"] = 0.0
+
+            if ts in df.index:
+                df.loc[ts, list(row.keys())] = list(row.values())
+            else:
+                df = pd.concat([df, pd.DataFrame([row], index=[ts])]).sort_index()
+            return df
+        except Exception:
+            return df
+
     if ticker == "FKLI=F":
         df = None
+        stock = None
         try:
             stock = yf.Ticker("^KLSE")
             df = stock.history(period=period)
-            if df.empty and period != "1mo":
+            if df is not None and df.empty and period != "1mo":
                 df = stock.history(period="1mo")
         except Exception:
             df = None
 
-        price = _tradingview_last_price_myr("MYX-FKLI1!")
-        if df is not None and not df.empty:
+        if df is not None and not df.empty and stock is not None:
+            df = _merge_intraday_daily(df, stock)
+            price = _tradingview_last_price_myr("MYX-FKLI1!")
             if price is not None:
                 try:
                     df = df.copy()
-                    df.iloc[-1, df.columns.get_loc("Close")] = price
+                    if "Close" in df.columns:
+                        df.iloc[-1, df.columns.get_loc("Close")] = price
                     for c in ["Open", "High", "Low"]:
                         if c in df.columns and pd.isna(df[c].iloc[-1]):
                             df.iloc[-1, df.columns.get_loc(c)] = price
                 except Exception:
                     pass
             return df, MARKET_INSIGHTS.get("FKLI=F", {}).get("name", "KLCI FUTURES")
+
+        price = _tradingview_last_price_myr("MYX-FKLI1!")
         if price is not None:
             return _synthetic_price_df(price), MARKET_INSIGHTS.get("FKLI=F", {}).get("name", "KLCI FUTURES")
 
@@ -172,32 +220,15 @@ def get_stock_data(ticker, period="1y"):
             
             if not df.empty:
                 try:
-                    if len(df) >= 1 and all(c in df.columns for c in ["Open", "High", "Low", "Close", "Volume"]):
-                        last = df.iloc[-1]
-                        if (pd.isna(last["Open"]) or pd.isna(last["High"]) or pd.isna(last["Low"]) or pd.isna(last["Close"])) and float(last["Volume"]) > 0.0:
-                            intra = None
-                            for interval in ["5m", "15m", "30m", "60m"]:
-                                try:
-                                    intra = stock.history(period="1d", interval=interval)
-                                    if intra is not None and not intra.empty:
-                                        break
-                                except Exception:
-                                    intra = None
-                            if intra is not None and not intra.empty and all(c in intra.columns for c in ["Open", "High", "Low", "Close", "Volume"]):
-                                o = float(intra["Open"].iloc[0])
-                                h = float(pd.to_numeric(intra["High"], errors="coerce").max())
-                                l = float(pd.to_numeric(intra["Low"], errors="coerce").min())
-                                c = float(intra["Close"].iloc[-1])
-                                v = float(pd.to_numeric(intra["Volume"], errors="coerce").fillna(0).sum())
-                                if all(x == x for x in [o, h, l, c]) and v >= 0:
-                                    df = df.copy()
-                                    df.iloc[-1, df.columns.get_loc("Open")] = o
-                                    df.iloc[-1, df.columns.get_loc("High")] = h
-                                    df.iloc[-1, df.columns.get_loc("Low")] = l
-                                    df.iloc[-1, df.columns.get_loc("Close")] = c
-                                    df.iloc[-1, df.columns.get_loc("Volume")] = v
+                    if df.index.tz is None:
+                        df = df.copy()
+                        df.index = df.index.tz_localize("Asia/Kuala_Lumpur")
+                    else:
+                        df = df.copy()
+                        df.index = df.index.tz_convert("Asia/Kuala_Lumpur")
                 except Exception:
                     pass
+                df = _merge_intraday_daily(df, stock)
 
                 name = base_name
                 # Only try yfinance info if we don't have a good name yet
@@ -211,6 +242,17 @@ def get_stock_data(ticker, period="1y"):
         except Exception:
             continue
     return None, base_name
+
+def _is_today_kl(ts) -> bool:
+    try:
+        t = pd.Timestamp(ts)
+        if t.tz is None:
+            t = t.tz_localize("Asia/Kuala_Lumpur")
+        else:
+            t = t.tz_convert("Asia/Kuala_Lumpur")
+        return t.normalize() == pd.Timestamp.now(tz="Asia/Kuala_Lumpur").normalize()
+    except Exception:
+        return False
 
 def analyze_breakout(ticker, df, resolved_name=None, min_rows=50):
     """
@@ -226,7 +268,7 @@ def analyze_breakout(ticker, df, resolved_name=None, min_rows=50):
             last_open = df["Open"].iloc[-1] if "Open" in df.columns else None
             if (pd.isna(last_close) or pd.isna(last_open)):
                 df = df.iloc[:-1]
-            elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0:
+            elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0 and not _is_today_kl(df.index[-1]):
                 df = df.iloc[:-1]
         except Exception:
             pass
@@ -341,7 +383,7 @@ def get_futures_breakouts():
                 last_open = df["Open"].iloc[-1] if "Open" in df.columns else None
                 if (pd.isna(last_close) or pd.isna(last_open)):
                     df = df.iloc[:-1]
-                elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0:
+                elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0 and not _is_today_kl(df.index[-1]):
                     df = df.iloc[:-1]
             except Exception:
                 pass
@@ -381,7 +423,7 @@ def get_top_breakouts(limit=10):
                 last_open = df["Open"].iloc[-1] if "Open" in df.columns else None
                 if (pd.isna(last_close) or pd.isna(last_open)):
                     df = df.iloc[:-1]
-                elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0:
+                elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0 and not _is_today_kl(df.index[-1]):
                     df = df.iloc[:-1]
             except Exception:
                 pass
