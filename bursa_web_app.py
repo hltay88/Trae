@@ -2,7 +2,6 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 from urllib.parse import quote
-import streamlit.components.v1 as components
 from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, search_bursa, get_top_breakouts, KLCI_COMPONENTS, get_futures_breakouts
 
 # --- PAGE CONFIG ---
@@ -45,42 +44,6 @@ def _render_chart(symbol: str):
 
         return df
 
-    def _render_tradingview(symbol_tv: str, height: int = 720):
-        html = f"""
-<div class="tradingview-widget-container">
-  <div id="tradingview_widget"></div>
-  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-  <script type="text/javascript">
-  new TradingView.widget({{
-    "autosize": true,
-    "symbol": "{symbol_tv}",
-    "interval": "D",
-    "timezone": "Asia/Kuala_Lumpur",
-    "theme": "dark",
-    "style": "1",
-    "locale": "en",
-    "enable_publishing": false,
-    "hide_top_toolbar": true,
-    "hide_legend": false,
-    "hide_side_toolbar": true,
-    "allow_symbol_change": false,
-    "save_image": false,
-    "container_id": "tradingview_widget"
-  }});
-  </script>
-</div>
-"""
-        components.html(html, height=height, scrolling=False)
-
-    if symbol.endswith(".KL"):
-        _render_tradingview(f"MYX:{symbol.replace('.KL', '')}")
-        return
-
-    if symbol in {"FKLI=F", "FCPO=F"}:
-        tv_map = {"FKLI=F": "MYX:FKLI1!", "FCPO=F": "MYX:FCPO1!"}
-        _render_tradingview(tv_map[symbol])
-        return
-
     df_chart, name_chart = get_stock_data(symbol, period="5y")
 
     if df_chart is None or df_chart.empty:
@@ -92,6 +55,13 @@ def _render_chart(symbol: str):
     if df_chart is None or df_chart.empty:
         st.error(f"Could not load any historical data for {symbol}.")
         return
+
+    if "Volume" in df_chart.columns:
+        try:
+            df_chart = df_chart.copy()
+            df_chart["Volume"] = pd.to_numeric(df_chart["Volume"], errors="coerce").fillna(0).astype("int64")
+        except Exception:
+            pass
 
     df_chart["SMA20"] = df_chart["Close"].rolling(window=20).mean()
     df_chart["SMA50"] = df_chart["Close"].rolling(window=50).mean()
