@@ -2,6 +2,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 from urllib.parse import quote
+import streamlit.components.v1 as components
 from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, search_bursa, get_top_breakouts, KLCI_COMPONENTS, get_futures_breakouts
 
 # --- PAGE CONFIG ---
@@ -43,6 +44,38 @@ def _render_chart(symbol: str):
                 pass
 
         return df
+
+    def _render_tradingview(symbol_tv: str, height: int = 720):
+        html = f"""
+<div class="tradingview-widget-container">
+  <div id="tradingview_widget"></div>
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <script type="text/javascript">
+  new TradingView.widget({{
+    "autosize": true,
+    "symbol": "{symbol_tv}",
+    "interval": "D",
+    "timezone": "Asia/Kuala_Lumpur",
+    "theme": "dark",
+    "style": "1",
+    "locale": "en",
+    "enable_publishing": false,
+    "hide_top_toolbar": true,
+    "hide_side_toolbar": true,
+    "allow_symbol_change": false,
+    "save_image": false,
+    "container_id": "tradingview_widget"
+  }});
+  </script>
+</div>
+"""
+        components.html(html, height=height, scrolling=False)
+
+    if symbol in {"FKLI=F", "FCPO=F"}:
+        tv_map = {"FKLI=F": "MYX:FKLI1!", "FCPO=F": "MYX:FCPO1!"}
+        _render_tradingview(tv_map[symbol])
+        st.caption("If the chart is blank, click the TradingView logo to open the full chart on TradingView.")
+        return
 
     df_chart, name_chart = get_stock_data(symbol, period="5y")
 
@@ -102,7 +135,7 @@ def _render_chart(symbol: str):
         title=f"{name_chart} ({symbol}) - Price Action",
         yaxis_title="Price",
         xaxis_rangeslider_visible=False,
-        template="plotly_white",
+        template="plotly_dark",
         height=650,
     )
     st.plotly_chart(fig, use_container_width=True)
@@ -114,7 +147,8 @@ def _render_chart(symbol: str):
     vol_fig = go.Figure(
         go.Bar(x=plot_df.index, y=plot_df["Volume"], name="Volume", marker_color=vol_colors)
     )
-    vol_fig.update_layout(title="Trading Volume", height=300, template="plotly_white")
+    vol_fig.update_layout(title="Trading Volume", height=300, template="plotly_dark")
+    vol_fig.update_yaxes(tickformat="~s")
     st.plotly_chart(vol_fig, use_container_width=True)
 
 
