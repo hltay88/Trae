@@ -98,7 +98,7 @@ def _render_chart(symbol: str):
 
     df_chart["SMA20"] = df_chart["Close"].rolling(window=20).mean()
     df_chart["SMA50"] = df_chart["Close"].rolling(window=50).mean()
-    plot_df = df_chart.tail(100)
+    plot_df = df_chart
 
     if plot_df.empty:
         st.error("Historical price data is too short for charting.")
@@ -134,7 +134,7 @@ def _render_chart(symbol: str):
     fig.update_layout(
         title=f"{name_chart} ({symbol}) - Price Action",
         yaxis_title="Price",
-        xaxis_rangeslider_visible=False,
+        xaxis_rangeslider_visible=True,
         template="plotly_dark",
         height=650,
     )

@@ -171,6 +171,34 @@ def get_stock_data(ticker, period="1y"):
                 df = stock.history(period="1mo")
             
             if not df.empty:
+                try:
+                    if len(df) >= 1 and all(c in df.columns for c in ["Open", "High", "Low", "Close", "Volume"]):
+                        last = df.iloc[-1]
+                        if (pd.isna(last["Open"]) or pd.isna(last["High"]) or pd.isna(last["Low"]) or pd.isna(last["Close"])) and float(last["Volume"]) > 0.0:
+                            intra = None
+                            for interval in ["5m", "15m", "30m", "60m"]:
+                                try:
+                                    intra = stock.history(period="1d", interval=interval)
+                                    if intra is not None and not intra.empty:
+                                        break
+                                except Exception:
+                                    intra = None
+                            if intra is not None and not intra.empty and all(c in intra.columns for c in ["Open", "High", "Low", "Close", "Volume"]):
+                                o = float(intra["Open"].iloc[0])
+                                h = float(pd.to_numeric(intra["High"], errors="coerce").max())
+                                l = float(pd.to_numeric(intra["Low"], errors="coerce").min())
+                                c = float(intra["Close"].iloc[-1])
+                                v = float(pd.to_numeric(intra["Volume"], errors="coerce").fillna(0).sum())
+                                if all(x == x for x in [o, h, l, c]) and v >= 0:
+                                    df = df.copy()
+                                    df.iloc[-1, df.columns.get_loc("Open")] = o
+                                    df.iloc[-1, df.columns.get_loc("High")] = h
+                                    df.iloc[-1, df.columns.get_loc("Low")] = l
+                                    df.iloc[-1, df.columns.get_loc("Close")] = c
+                                    df.iloc[-1, df.columns.get_loc("Volume")] = v
+                except Exception:
+                    pass
+
                 name = base_name
                 # Only try yfinance info if we don't have a good name yet
                 if name == ticker or ".KL" in str(name):
