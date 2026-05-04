@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
-from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, analyze_breakout_v2, search_bursa, get_top_breakouts, KLCI_COMPONENTS, get_futures_breakouts
+from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, analyze_breakout_v2, search_bursa, get_top_breakouts, get_stock_universe, KLCI_COMPONENTS, get_futures_breakouts
 
 class BursaAnalyzerGUI:
     def __init__(self, root):
@@ -289,7 +289,8 @@ class BursaAnalyzerGUI:
     def run_analysis(self):
         # 1. Scan Stocks
         u_mode = self.universe_mode.get() if hasattr(self, "universe_mode") else "curated"
-        self.status_label.config(text=f"Scanning stock universe ({u_mode}) for top breakouts...")
+        u_list, u_src = get_stock_universe(u_mode)
+        self.status_label.config(text=f"Scanning stock universe ({u_mode}, {len(u_list)} tickers) for top breakouts...")
         top_results = get_top_breakouts(limit=20, model="v2", universe_mode=u_mode)
         
         # Add custom tickers to the results as well

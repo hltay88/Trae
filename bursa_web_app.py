@@ -3,7 +3,7 @@ import plotly.graph_objects as go
 import pandas as pd
 from urllib.parse import quote
 import streamlit.components.v1 as components
-from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, analyze_breakout_v2, search_bursa, get_top_breakouts, KLCI_COMPONENTS, get_futures_breakouts
+from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, analyze_breakout_v2, search_bursa, get_top_breakouts, get_stock_universe, BURSA_UNIVERSE_FILE, KLCI_COMPONENTS, get_futures_breakouts
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Bursa Breakout Analyzer", layout="wide", page_icon="📈")
@@ -242,6 +242,11 @@ if not popup_mode:
     st.sidebar.header("🔍 Market Discovery")
     st.sidebar.info("Scans a Bursa universe to identify the strongest technical breakouts.")
 
+    universe_list, universe_src = get_stock_universe(st.session_state.universe_mode)
+    st.sidebar.caption(f"Universe loaded: {len(universe_list)} tickers ({universe_src})")
+    if universe_src != "file" and st.session_state.universe_mode == "file":
+        st.sidebar.warning(f"Could not load {BURSA_UNIVERSE_FILE}. Falling back to curated universe.")
+
     universe_label = st.sidebar.radio(
         "Universe",
         ["Curated (Fast)", "From File (Full)"],
@@ -256,7 +261,7 @@ if not popup_mode:
             st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
         st.rerun()
     if st.session_state.universe_mode == "file":
-        st.sidebar.caption("Universe source: bursa_universe.csv in the app folder. Add one ticker per line (e.g., 6742.KL or 6742).")
+        st.sidebar.caption("Universe source: bursa_universe.csv in the app folder. Put one 4-digit stock code per line (Main + ACE). Example: 6742 or 6742.KL.")
 
     model_label = st.sidebar.radio(
         "Breakout Model",

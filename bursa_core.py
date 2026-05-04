@@ -552,13 +552,23 @@ def _load_universe_from_file(path: str):
             if s in {"TICKER", "SYMBOL", "CODE"}:
                 continue
             s = s.replace(" ", "")
-            if s.startswith("^") or s.endswith("=F") or "." in s:
-                out.append(s)
+
+            base = s
+            if base.endswith(".KL"):
+                base = base[:-3]
+
+            if base.startswith("^") or base.endswith("=F"):
                 continue
-            if s.isdigit() and len(s) == 4:
-                out.append(f"{s}.KL")
-            else:
-                out.append(f"{s}.KL")
+
+            if "REIT" in base or "ETF" in base:
+                continue
+            if base.endswith("EA"):
+                continue
+            if base.endswith(("WA", "WB", "WC", "WD", "WE", "WF", "WG")) or "-W" in base:
+                continue
+
+            if base.isdigit() and len(base) == 4:
+                out.append(f"{base}.KL")
         return sorted(set(out))
     except Exception:
         return []
