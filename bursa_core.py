@@ -67,9 +67,9 @@ MARKET_INSIGHTS = {
     "4677.KL": {"code": "4677", "name": "YTL", "sector": "Conglomerate", "analysis": "Strong performance from utility and data center divisions.", "catalyst": "AI data center development."},
     "7148.KL": {"code": "7148", "name": "DPHARMA", "sector": "Healthcare", "analysis": "Strong local pharmaceutical market share.", "catalyst": "Public healthcare spending."},
     "5099.KL": {"code": "5099", "name": "CAPITALA", "sector": "Aviation", "analysis": "Proxy for regional travel surge.", "catalyst": "AirAsia recovery and digital assets."},
-    "FKLI=F": {"code": "FKLI", "name": "KLCI FUTURES", "sector": "Futures", "analysis": "Proxy for the underlying FBM KLCI index.", "catalyst": "Market sentiment."},
-    "FCPO=F": {"code": "FCPO", "name": "CPO FUTURES", "sector": "Futures", "analysis": "Global benchmark for Crude Palm Oil.", "catalyst": "Supply/demand in edible oils."},
-    "FM70=F": {"code": "FM70", "name": "MID 70 FUTURES", "sector": "Futures", "analysis": "Proxy for the FBM Mid 70 Index.", "catalyst": "Mid-cap market momentum."}
+    "FKLI=F": {"code": "FKLI", "name": "KLCI FUTURES", "sector": "Futures", "analysis": "Proxy for the underlying FBM KLCI index. High correlation with banking and utility heavyweights.", "catalyst": "Market sentiment and index component performance."},
+    "FCPO=F": {"code": "FCPO", "name": "CPO FUTURES", "sector": "Futures", "analysis": "Global benchmark for Crude Palm Oil. Driven by edible oil supply/demand and biodiesel mandates.", "catalyst": "Indonesian export policies and weather patterns."},
+    "FM70=F": {"code": "FM70", "name": "MID 70 FUTURES", "sector": "Futures", "analysis": "Proxy for the FBM Mid 70 Index, representing mid-cap growth stocks.", "catalyst": "Domestic liquidity and mid-cap earnings momentum."}
 }
 
 def get_stock_data(ticker, period="1y"):
@@ -79,9 +79,9 @@ def get_stock_data(ticker, period="1y"):
     """
     ticker = ticker.upper().strip()
     ALT_SYMBOLS = {
-        "FKLI=F": ["0001.KL", "FKLI=F", "KLI=F", "^KLCI"],
-        "FCPO=F": ["CPO=F", "FCPO=F", "FCP.KL"],
-        "FM70=F": ["^KL70", "FM70=F", "0002.KL"]
+        "FKLI=F": ["FKLI=F", "^KLCI", "FKLIK26.KL", "FKLIM26.KL"],
+        "FCPO=F": ["FCPO=F", "FCPON26.KL", "FCPOK26.KL", "FCPOM26.KL"],
+        "FM70=F": ["FM70=F", "^KL70", "FM70K26.KL", "FM70M26.KL"]
     }
     
     symbols_to_try = ALT_SYMBOLS.get(ticker, [ticker])
