@@ -257,6 +257,32 @@ def _is_today_kl(ts) -> bool:
     except Exception:
         return False
 
+def _resolve_insight(ticker: str, resolved_name: str | None):
+    t = str(ticker).upper().strip()
+    code = t.split(".")[0]
+    analysis = "Technical breakout analysis based on live data."
+    catalyst = "Market momentum / Trend following."
+
+    insight = MARKET_INSIGHTS.get(t)
+    if not insight:
+        for _, v in MARKET_INSIGHTS.items():
+            if v.get("code") == code:
+                insight = v
+                break
+
+    if insight:
+        name = insight["name"]
+        code = insight["code"]
+        analysis = insight["analysis"]
+        catalyst = insight["catalyst"]
+    else:
+        name = resolved_name or code
+
+    if name == t or name == code or ".KL" in str(name):
+        name = str(name).replace(".KL", "").strip()
+
+    return code, name, analysis, catalyst
+
 def analyze_breakout(ticker, df, resolved_name=None, min_rows=50):
     """
     Performs technical breakout analysis.
@@ -309,34 +335,7 @@ def analyze_breakout(ticker, df, resolved_name=None, min_rows=50):
         score = 1
         is_volume_surge = False
     
-    # --- NAME RESOLUTION LOGIC ---
-    name = None
-    code = ticker.split(".")[0]
-    analysis = "Technical breakout analysis based on live data."
-    catalyst = "Market momentum / Trend following."
-
-    # 1. Try exact match in MARKET_INSIGHTS
-    insight = MARKET_INSIGHTS.get(ticker)
-    
-    # 2. Try match by code if ticker match fails (e.g. 6888 vs 6888.KL)
-    if not insight:
-        for k, v in MARKET_INSIGHTS.items():
-            if v.get('code') == code:
-                insight = v
-                break
-    
-    if insight:
-        name = insight["name"]
-        code = insight["code"]
-        analysis = insight["analysis"]
-        catalyst = insight["catalyst"]
-    else:
-        # 3. Fallback to resolved_name or ticker cleaning
-        name = resolved_name or code
-        
-    # Final cleanup: If name is still just the ticker code, try to clean it
-    if name == ticker or name == code or ".KL" in str(name):
-        name = str(name).replace(".KL", "").strip()
+    code, name, analysis, catalyst = _resolve_insight(ticker, resolved_name)
     
     return {
         "ticker": ticker,
@@ -348,6 +347,163 @@ def analyze_breakout(ticker, df, resolved_name=None, min_rows=50):
         "score": score,
         "analysis": analysis,
         "catalyst": catalyst
+    }
+
+def analyze_breakout_v2(ticker, df, resolved_name=None, benchmark_df=None, min_rows=120):
+    if df is None or len(df) < min_rows:
+        return None
+
+    if len(df) >= 2:
+        try:
+            last_close = df["Close"].iloc[-1] if "Close" in df.columns else None
+            last_open = df["Open"].iloc[-1] if "Open" in df.columns else None
+            if (pd.isna(last_close) or pd.isna(last_open)):
+                df = df.iloc[:-1]
+            elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0 and not _is_today_kl(df.index[-1]):
+                df = df.iloc[:-1]
+        except Exception:
+            pass
+
+    if df is None or len(df) < min_rows:
+        return None
+
+    ticker = str(ticker).upper().strip()
+    df = df.copy()
+    for c in ["Open", "High", "Low", "Close", "Volume"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    try:
+        current_close = float(df["Close"].iloc[-1])
+        if not (current_close > 0.0):
+            return None
+    except Exception:
+        return None
+
+    rsi = 50.0
+    try:
+        rsi_v = RSIIndicator(df["Close"], window=14).rsi().iloc[-1]
+        if rsi_v == rsi_v:
+            rsi = float(rsi_v)
+    except Exception:
+        pass
+
+    sma20 = sma50 = sma200 = None
+    try:
+        sma20 = float(SMAIndicator(df["Close"], window=20).sma_indicator().iloc[-1])
+        sma50 = float(SMAIndicator(df["Close"], window=50).sma_indicator().iloc[-1])
+        if len(df) >= 220:
+            sma200 = float(SMAIndicator(df["Close"], window=200).sma_indicator().iloc[-1])
+    except Exception:
+        pass
+
+    score = 0
+    score_max = 10
+
+    try:
+        if sma50 is not None and current_close > sma50:
+            sma50_prev = float(SMAIndicator(df["Close"], window=50).sma_indicator().iloc[-6])
+            if sma50_prev == sma50_prev and sma50 > sma50_prev:
+                score += 2
+    except Exception:
+        pass
+
+    try:
+        if sma200 is not None and current_close > sma200:
+            sma200_prev = float(SMAIndicator(df["Close"], window=200).sma_indicator().iloc[-6])
+            if sma200_prev == sma200_prev and sma200 > sma200_prev:
+                score += 2
+    except Exception:
+        pass
+
+    breakout_lookback = 55
+    try:
+        if len(df) >= breakout_lookback + 5:
+            prior_high = float(df["Close"].iloc[-breakout_lookback:-1].max())
+            if current_close > prior_high:
+                score += 2
+    except Exception:
+        pass
+
+    try:
+        o = float(df["Open"].iloc[-1])
+        h = float(df["High"].iloc[-1])
+        l = float(df["Low"].iloc[-1])
+        if h > l:
+            close_pos = (current_close - l) / (h - l)
+            if close_pos >= 0.7:
+                score += 1
+    except Exception:
+        pass
+
+    try:
+        if "Volume" in df.columns and len(df) >= 30:
+            current_vol = float(df["Volume"].iloc[-1])
+            avg_vol20 = float(df["Volume"].rolling(window=20).mean().iloc[-1])
+            if avg_vol20 > 0 and current_vol >= avg_vol20 * 1.8:
+                score += 1
+            traded_value20 = float((df["Close"] * df["Volume"]).rolling(window=20).mean().iloc[-1])
+            if traded_value20 >= 1_000_000:
+                score += 1
+    except Exception:
+        pass
+
+    rs_3m = None
+    try:
+        if benchmark_df is not None and not benchmark_df.empty:
+            s = df["Close"].copy()
+            b = benchmark_df["Close"].copy() if "Close" in benchmark_df.columns else None
+            if b is not None:
+                join = pd.concat([s, b], axis=1, join="inner").dropna()
+                if len(join) >= 70:
+                    s_now = float(join.iloc[-1, 0])
+                    s_prev = float(join.iloc[-64, 0])
+                    b_now = float(join.iloc[-1, 1])
+                    b_prev = float(join.iloc[-64, 1])
+                    if s_prev > 0 and b_prev > 0:
+                        rs_3m = (s_now / s_prev) - (b_now / b_prev)
+                        if rs_3m > 0:
+                            score += 1
+    except Exception:
+        pass
+
+    atr_contraction = False
+    try:
+        if len(df) >= 40:
+            prev_close = df["Close"].shift(1)
+            tr = pd.concat(
+                [
+                    (df["High"] - df["Low"]).abs(),
+                    (df["High"] - prev_close).abs(),
+                    (df["Low"] - prev_close).abs(),
+                ],
+                axis=1,
+            ).max(axis=1)
+            atr14 = tr.rolling(window=14).mean()
+            atr_pct = atr14 / df["Close"]
+            recent = float(pd.to_numeric(atr_pct.tail(5), errors="coerce").dropna().mean())
+            prior = float(pd.to_numeric(atr_pct.iloc[-25:-5], errors="coerce").dropna().mean())
+            if prior > 0 and recent > 0 and recent <= prior * 0.8:
+                atr_contraction = True
+                score += 1
+    except Exception:
+        pass
+
+    code, name, analysis, catalyst = _resolve_insight(ticker, resolved_name)
+
+    return {
+        "ticker": ticker,
+        "code": code,
+        "name": name,
+        "price": float(round(float(current_close), 3)),
+        "rsi": float(round(float(rsi), 2)),
+        "score": int(score),
+        "score_max": int(score_max),
+        "analysis": analysis,
+        "catalyst": catalyst,
+        "rs_3m": None if rs_3m is None else float(rs_3m),
+        "atr_contraction": bool(atr_contraction),
+        "model": "v2",
     }
 
 # --- KLCI COMPONENTS (Top 30 Stocks) ---
@@ -407,12 +563,21 @@ def get_futures_breakouts():
             results.append(analysis)
     return results
 
-def get_top_breakouts(limit=10):
+def get_top_breakouts(limit=10, model="v2"):
     """
     Scans the KLCI components and returns the top N stocks 
     based on their breakout scores.
     """
     all_results = []
+    benchmark_df = None
+    if str(model).lower() == "v2":
+        try:
+            bench = yf.Ticker("^KLSE")
+            benchmark_df = bench.history(period="1y")
+            if benchmark_df is not None and not benchmark_df.empty:
+                benchmark_df = benchmark_df.dropna(subset=[c for c in ["Close"] if c in benchmark_df.columns])
+        except Exception:
+            benchmark_df = None
     
     # Using individual fetching for better error handling in this environment
     for ticker in KLCI_COMPONENTS:
@@ -446,7 +611,10 @@ def get_top_breakouts(limit=10):
         except Exception:
             continue
 
-        analysis = analyze_breakout(ticker, df, resolved_name)
+        if str(model).lower() == "v2":
+            analysis = analyze_breakout_v2(ticker, df, resolved_name, benchmark_df=benchmark_df, min_rows=120)
+        else:
+            analysis = analyze_breakout(ticker, df, resolved_name)
         if analysis:
             all_results.append(analysis)
     

@@ -3,7 +3,7 @@ import plotly.graph_objects as go
 import pandas as pd
 from urllib.parse import quote
 import streamlit.components.v1 as components
-from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, search_bursa, get_top_breakouts, KLCI_COMPONENTS, get_futures_breakouts
+from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, analyze_breakout_v2, search_bursa, get_top_breakouts, KLCI_COMPONENTS, get_futures_breakouts
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Bursa Breakout Analyzer", layout="wide", page_icon="📈")
@@ -195,6 +195,9 @@ def _render_chart(symbol: str):
 chart_symbol = _get_query_param("chart")
 popup_mode = _get_query_param("popup")
 
+if "breakout_model" not in st.session_state:
+    st.session_state.breakout_model = "v2"
+
 # --- UI ---
 if not chart_symbol:
     st.title("📈 Bursa Malaysia Breakout Analyzer")
@@ -229,8 +232,7 @@ if chart_symbol:
 # Initialize session state for watchlist
 if 'watchlist' not in st.session_state:
     with st.spinner("Initializing Market Discovery..."):
-        # Get top 10 breakouts from KLCI components on first load
-        top_breakouts = get_top_breakouts(limit=10)
+        top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model)
         st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
 
 # Sidebar for adding stocks (hide in popup mode)
@@ -238,9 +240,23 @@ if not popup_mode:
     st.sidebar.header("🔍 Market Discovery")
     st.sidebar.info("Scans 30 major KLCI stocks to identify the strongest technical breakouts.")
 
+    model_label = st.sidebar.radio(
+        "Breakout Model",
+        ["Stronger (V2)", "Original (V1)"],
+        index=0 if st.session_state.breakout_model == "v2" else 1,
+        horizontal=True,
+    )
+    selected_model = "v2" if model_label.startswith("Stronger") else "v1"
+    if selected_model != st.session_state.breakout_model:
+        st.session_state.breakout_model = selected_model
+        with st.spinner("Refreshing list for selected model..."):
+            top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model)
+            st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+        st.rerun()
+
     if st.sidebar.button("🔄 Refresh Market Discovery", use_container_width=True):
         with st.spinner("Re-scanning KLCI components..."):
-            top_breakouts = get_top_breakouts(limit=10)
+            top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model)
             st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
             st.success("Dashboard updated!")
             st.rerun()
@@ -260,8 +276,8 @@ if not popup_mode:
         else:
             st.error("Could not find stock. Try using the exact code (e.g., 5347).")
 
-    if st.sidebar.button("🗑️ Reset to Top 10", use_container_width=True):
-        top_breakouts = get_top_breakouts(limit=10)
+    if st.sidebar.button("🗑️ Reset to Top 20", use_container_width=True):
+        top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model)
         st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
         st.rerun()
 
@@ -270,6 +286,14 @@ tab_stocks, tab_futures = st.tabs(["📊 Stock Breakouts", "⛓️ Futures Monit
 
 with tab_stocks:
     data_rows = []
+    breakout_model = st.session_state.get("breakout_model", "v2")
+    benchmark_df = None
+    if breakout_model == "v2":
+        try:
+            benchmark_df, _ = get_stock_data("^KLSE", period="1y")
+        except Exception:
+            benchmark_df = None
+
     # Use a spinner for the load
     with st.spinner("Fetching latest live prices..."):
         for t in st.session_state.watchlist:
@@ -277,17 +301,22 @@ with tab_stocks:
             if "=F" in t: continue
             df, name = get_stock_data(t, period="1y")
             if df is not None and not df.empty:
-                analysis = analyze_breakout(t, df, name)
+                if breakout_model == "v2":
+                    analysis = analyze_breakout_v2(t, df, name, benchmark_df=benchmark_df) or analyze_breakout(t, df, name)
+                else:
+                    analysis = analyze_breakout(t, df, name)
                 if analysis:
                     data_rows.append(analysis)
 
     if data_rows:
         # Top Metrics
-        total_breakouts = len([r for r in data_rows if r['score'] >= 4])
+        strong_threshold = 7 if breakout_model == "v2" else 4
+        neutral_threshold = 4 if breakout_model == "v2" else 2
+        total_breakouts = len([r for r in data_rows if int(r.get('score', 0)) >= strong_threshold])
         avg_rsi = sum([r['rsi'] for r in data_rows]) / len(data_rows)
         
         col1, col2, col3 = st.columns(3)
-        col1.metric("Strong Breakouts (Score 4+)", total_breakouts)
+        col1.metric(f"Strong Breakouts (Score {strong_threshold}+)", total_breakouts)
         col2.metric("Watchlist Count", len(data_rows))
         col3.metric("Avg Watchlist RSI", f"{avg_rsi:.1f}")
 
@@ -298,14 +327,16 @@ with tab_stocks:
         for r in data_rows:
             link = f"?chart={quote(r['ticker'])}&popup=1"
             linked_name = f'<a href="{link}" target="_blank" rel="noopener noreferrer">{r["name"]}</a>'
+            score_max = int(r.get("score_max", 5))
+            score_val = int(r.get("score", 0))
             display_rows.append({
                 "Ticker": r['ticker'],
                 "Name": linked_name,
                 "Last Price (RM)": f"{float(r['price']):.2f}",
-                "Score": f"{r['score']}/5",
+                "Score": f"{score_val}/{score_max}",
                 "RSI": r['rsi'],
-                "Status": "🔥 STRONG" if r['score'] >= 4 else ("⚖️ NEUTRAL" if r['score'] >= 2 else "❄️ WEAK"),
-                "Catalyst / Insight": r['catalyst'] if r['score'] >= 3 else r['analysis']
+                "Status": "🔥 STRONG" if score_val >= strong_threshold else ("⚖️ NEUTRAL" if score_val >= neutral_threshold else "❄️ WEAK"),
+                "Catalyst / Insight": r['catalyst'] if score_val >= neutral_threshold else r['analysis']
             })
         
         df_display = pd.DataFrame(display_rows)
@@ -357,14 +388,24 @@ if not popup_mode:
 # --- TECHNICAL EXPLANATION ---
 with st.expander("ℹ️ How is the Breakout Score calculated?"):
     st.markdown("""
-    The **Breakout Score (0-5)** is a technical indicator that measures the strength of a stock's upward momentum. It is calculated as follows:
+    You can switch between **Stronger (V2)** and **Original (V1)** using the sidebar toggle.
     
-    1.  **Trend Alignment (+1 point)**: Awarded if the current price is above both the **20-day** and **50-day** Simple Moving Averages (SMA). This indicates a healthy medium-term uptrend.
-    2.  **Volume Surge (+2 points)**: Awarded if today's trading volume is at least **1.5x higher** than the average volume of the last 20 days. High volume confirms that big institutional players are entering the stock.
-    3.  **Price Breakout (+2 points)**: Awarded if the current price is higher than the maximum price reached in the last 20 trading days. This indicates the stock has broken through a recent resistance level.
+    **Stronger (V2) — Score 0-10** emphasizes:
+    
+    1. **Trend strength (SMA50 & SMA200)**: Price above rising moving averages.
+    2. **Breakout trigger (55-day high)**: Close breaks above the prior 55 trading days' close-high.
+    3. **Confirmation (volume & liquidity)**: Volume surge and sufficient average traded value.
+    4. **Quality (close strength & volatility contraction)**: Strong close within the day's range and tighter volatility before the breakout.
+    5. **Leadership (relative strength vs KLCI)**: Outperformance versus the KLCI benchmark over ~3 months.
+
+    **Original (V1) — Score 0-5** emphasizes:
+    
+    1. **Trend (SMA20 & SMA50)**: Price above both moving averages.
+    2. **Volume surge**: Volume > 1.5× 20-day average.
+    3. **Breakout**: Close above the prior 20-day close-high.
     
     **Status Legend:**
-    *   🔥 **STRONG (Score 4-5)**: High probability of a sustained move.
-    *   ⚖️ **NEUTRAL (Score 2-3)**: Showing signs of interest but lacks full confirmation.
-    *   ❄️ **WEAK (Score 0-1)**: No significant breakout signals detected.
+    * 🔥 **STRONG (Score 7-10)**
+    * ⚖️ **NEUTRAL (Score 4-6)**
+    * ❄️ **WEAK (Score 0-3)**
     """)

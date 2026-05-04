@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
-from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, search_bursa, get_top_breakouts, KLCI_COMPONENTS, get_futures_breakouts
+from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, analyze_breakout_v2, search_bursa, get_top_breakouts, KLCI_COMPONENTS, get_futures_breakouts
 
 class BursaAnalyzerGUI:
     def __init__(self, root):
@@ -30,7 +30,7 @@ class BursaAnalyzerGUI:
         self.control_frame = tk.Frame(self.root, bg="#f0f2f5", pady=10)
         self.control_frame.pack(fill="x", padx=20)
 
-        self.scan_btn = tk.Button(self.control_frame, text="REFRESH TOP 10", command=self.start_scan,
+        self.scan_btn = tk.Button(self.control_frame, text="REFRESH TOP 20", command=self.start_scan,
                                   font=("Helvetica", 10, "bold"), bg="#4caf50", fg="white", 
                                   padx=15, pady=5, relief="flat", cursor="hand2")
         self.scan_btn.pack(side="left")
@@ -271,25 +271,30 @@ class BursaAnalyzerGUI:
     def run_analysis(self):
         # 1. Scan Stocks
         self.status_label.config(text="Scanning 30+ stocks for top breakouts...")
-        top_results = get_top_breakouts(limit=10)
+        top_results = get_top_breakouts(limit=20, model="v2")
         
         # Add custom tickers to the results as well
         for ticker in self.custom_tickers:
             df, resolved_name = get_stock_data(ticker)
-            res = analyze_breakout(ticker, df, resolved_name)
+            res = analyze_breakout_v2(ticker, df, resolved_name) or analyze_breakout(ticker, df, resolved_name)
             if res:
                 if not any(r['ticker'] == ticker for r in top_results):
                     top_results.append(res)
         
         # Insert into stocks tree
         for res in top_results:
+            score_val = int(res.get("score", 0))
+            score_max = int(res.get("score_max", 5))
+            pct = (score_val / score_max) if score_max > 0 else 0.0
             tag = "low_score"
-            if res['score'] >= 4: tag = "high_score"
-            elif res['score'] >= 2: tag = "mid_score"
+            if pct >= 0.7:
+                tag = "high_score"
+            elif pct >= 0.4:
+                tag = "mid_score"
             
             self.tree.insert("", "end", values=(
                 res['code'], res['name'], res['price'], 
-                f"{res['score']} / 5", res['rsi'], res['analysis'], res['catalyst']
+                f"{score_val} / {score_max}", res['rsi'], res['analysis'], res['catalyst']
             ), tags=(tag,))
 
         # 2. Scan Futures
