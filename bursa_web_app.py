@@ -1,15 +1,106 @@
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
+from urllib.parse import quote
 from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, search_bursa, get_top_breakouts, KLCI_COMPONENTS, get_futures_breakouts
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Bursa Breakout Analyzer", layout="wide", page_icon="📈")
 
+# --- QUERY PARAMS (Popup Chart Mode) ---
+def _get_query_param(name: str):
+    try:
+        v = st.query_params.get(name)
+        if isinstance(v, list):
+            return v[0] if v else None
+        return v
+    except Exception:
+        try:
+            return st.experimental_get_query_params().get(name, [None])[0]
+        except Exception:
+            return None
+
+
+def _render_chart(symbol: str):
+    df_chart, name_chart = get_stock_data(symbol, period="5y")
+
+    if df_chart is None or df_chart.empty:
+        st.warning(f"5-year data unavailable for {symbol}. Trying 1-year data...")
+        df_chart, name_chart = get_stock_data(symbol, period="1y")
+
+    if df_chart is None or df_chart.empty:
+        st.error(f"Could not load any historical data for {symbol}.")
+        return
+
+    df_chart["SMA20"] = df_chart["Close"].rolling(window=20).mean()
+    df_chart["SMA50"] = df_chart["Close"].rolling(window=50).mean()
+    plot_df = df_chart.tail(100)
+
+    if plot_df.empty:
+        st.error("Historical price data is too short for charting.")
+        return
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Candlestick(
+            x=plot_df.index,
+            open=plot_df["Open"],
+            high=plot_df["High"],
+            low=plot_df["Low"],
+            close=plot_df["Close"],
+            name="Market",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df.index,
+            y=plot_df["SMA20"],
+            line=dict(color="orange", width=1.5),
+            name="SMA 20",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df.index,
+            y=plot_df["SMA50"],
+            line=dict(color="blue", width=1.5),
+            name="SMA 50",
+        )
+    )
+    fig.update_layout(
+        title=f"{name_chart} ({symbol}) - Price Action",
+        yaxis_title="Price",
+        xaxis_rangeslider_visible=False,
+        template="plotly_white",
+        height=650,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    vol_colors = [
+        "green" if plot_df["Close"].iloc[i] >= plot_df["Open"].iloc[i] else "red"
+        for i in range(len(plot_df))
+    ]
+    vol_fig = go.Figure(
+        go.Bar(x=plot_df.index, y=plot_df["Volume"], name="Volume", marker_color=vol_colors)
+    )
+    vol_fig.update_layout(title="Trading Volume", height=300, template="plotly_white")
+    st.plotly_chart(vol_fig, use_container_width=True)
+
+
+chart_symbol = _get_query_param("chart")
+popup_mode = _get_query_param("popup")
+
 # --- UI ---
 st.title("📈 Bursa Malaysia Breakout Analyzer")
 st.subheader("Dynamic Market Scanner & Research Tool")
 st.markdown("---")
+
+# Popup/new-tab chart view (opened from table clicks)
+if chart_symbol:
+    with st.spinner(f"Loading chart for {chart_symbol}..."):
+        _render_chart(chart_symbol)
+    st.markdown(f"[Back to Dashboard](/)")
+    st.stop()
 
 # Initialize session state for watchlist
 if 'watchlist' not in st.session_state:
@@ -18,36 +109,37 @@ if 'watchlist' not in st.session_state:
         top_breakouts = get_top_breakouts(limit=10)
         st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
 
-# Sidebar for adding stocks
-st.sidebar.header("🔍 Market Discovery")
-st.sidebar.info("Scans 30 major KLCI stocks to identify the strongest technical breakouts.")
+# Sidebar for adding stocks (hide in popup mode)
+if not popup_mode:
+    st.sidebar.header("🔍 Market Discovery")
+    st.sidebar.info("Scans 30 major KLCI stocks to identify the strongest technical breakouts.")
 
-if st.sidebar.button("🔄 Refresh Market Discovery", use_container_width=True):
-    with st.spinner("Re-scanning KLCI components..."):
+    if st.sidebar.button("🔄 Refresh Market Discovery", use_container_width=True):
+        with st.spinner("Re-scanning KLCI components..."):
+            top_breakouts = get_top_breakouts(limit=10)
+            st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+            st.success("Dashboard updated!")
+            st.rerun()
+
+    st.sidebar.markdown("---")
+    st.sidebar.header("➕ Add Custom Stock")
+    new_stock = st.sidebar.text_input("Enter Name, Code or Futures (e.g., GENTING, 0166, FKLI)")
+    if st.sidebar.button("Add to Watchlist", use_container_width=True):
+        ticker = search_bursa(new_stock)
+        if ticker:
+            if ticker not in st.session_state.watchlist:
+                st.session_state.watchlist.append(ticker)
+                st.success(f"Added {ticker}!")
+                st.rerun()
+            else:
+                st.info(f"{ticker} is already in your list.")
+        else:
+            st.error("Could not find stock. Try using the exact code (e.g., 5347).")
+
+    if st.sidebar.button("🗑️ Reset to Top 10", use_container_width=True):
         top_breakouts = get_top_breakouts(limit=10)
         st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
-        st.success("Dashboard updated!")
         st.rerun()
-
-st.sidebar.markdown("---")
-st.sidebar.header("➕ Add Custom Stock")
-new_stock = st.sidebar.text_input("Enter Name, Code or Futures (e.g., GENTING, 0166, FKLI)")
-if st.sidebar.button("Add to Watchlist", use_container_width=True):
-    ticker = search_bursa(new_stock)
-    if ticker:
-        if ticker not in st.session_state.watchlist:
-            st.session_state.watchlist.append(ticker)
-            st.success(f"Added {ticker}!")
-            st.rerun()
-        else:
-            st.info(f"{ticker} is already in your list.")
-    else:
-        st.error("Could not find stock. Try using the exact code (e.g., 5347).")
-
-if st.sidebar.button("🗑️ Reset to Top 10", use_container_width=True):
-    top_breakouts = get_top_breakouts(limit=10)
-    st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
-    st.rerun()
 
 # --- MAIN DASHBOARD TABS ---
 tab_stocks, tab_futures = st.tabs(["📊 Stock Breakouts", "⛓️ Futures Monitoring"])
@@ -80,9 +172,11 @@ with tab_stocks:
         # Prepare display dataframe
         display_rows = []
         for r in data_rows:
+            link = f"?chart={quote(r['ticker'])}&popup=1"
+            linked_name = f'<a href="{link}" target="_blank" rel="noopener noreferrer">{r["name"]}</a>'
             display_rows.append({
                 "Ticker": r['ticker'],
-                "Name": r['name'],
+                "Name": linked_name,
                 "Price (RM)": r['price'],
                 "Score": f"{r['score']}/5",
                 "RSI": r['rsi'],
@@ -91,7 +185,8 @@ with tab_stocks:
             })
         
         df_display = pd.DataFrame(display_rows)
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        st.caption("Tip: click the stock name to open its chart in a new window/tab.")
+        st.markdown(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
     else:
         st.warning("No data found. Please click 'Refresh Market Discovery' or add valid tickers.")
 
@@ -106,8 +201,10 @@ with tab_futures:
     if futures_data:
         futures_display = []
         for r in futures_data:
+            link = f"?chart={quote(r['ticker'])}&popup=1"
+            linked_name = f'<a href="{link}" target="_blank" rel="noopener noreferrer">{r["name"]}</a>'
             futures_display.append({
-                "Future Contract": r['name'],
+                "Future Contract": linked_name,
                 "Ticker": r['ticker'],
                 "Last Price": r['price'],
                 "Breakout Score": f"{r['score']}/5",
@@ -117,75 +214,21 @@ with tab_futures:
             })
         
         df_futures = pd.DataFrame(futures_display)
-        st.dataframe(df_futures, use_container_width=True, hide_index=True)
+        st.caption("Tip: click the futures contract name to open its chart in a new window/tab.")
+        st.markdown(df_futures.to_html(escape=False, index=False), unsafe_allow_html=True)
         
         # Add a note about futures
         st.caption("Note: Futures analysis uses daily settlement prices. Breakout scores 4+ indicate high trend momentum.")
     else:
         st.error("Could not fetch futures data. Please check your internet connection.")
 
-# Detailed Chart Section
-st.markdown("---")
-st.subheader("🕯️ Interactive Technical Charts")
+if not popup_mode:
+    st.sidebar.markdown("---")
+    show_debug = st.sidebar.checkbox("Show Debug Info")
+    if show_debug:
+        st.sidebar.write("Current Watchlist:", st.session_state.watchlist)
 
-# Combine watchlist and futures for the chart selector
-all_selectable = st.session_state.watchlist + [f['ticker'] for f in futures_data if f['ticker'] not in st.session_state.watchlist]
-
-if all_selectable:
-    selected_stock = st.selectbox("Select stock or future to view chart", all_selectable)
-
-    if selected_stock:
-        with st.spinner(f"Loading chart for {selected_stock}..."):
-            df_chart, name_chart = get_stock_data(selected_stock, period="5y")
-            
-            if df_chart is None or df_chart.empty:
-                st.warning(f"5-year data unavailable for {selected_stock}. Trying 1-year data...")
-                df_chart, name_chart = get_stock_data(selected_stock, period="1y")
-
-            if df_chart is not None and not df_chart.empty:
-                # Indicators
-                df_chart['SMA20'] = df_chart['Close'].rolling(window=20).mean()
-                df_chart['SMA50'] = df_chart['Close'].rolling(window=50).mean()
-                
-                # Show last 100 days for candlestick
-                plot_df = df_chart.tail(100)
-                
-                if not plot_df.empty:
-                    fig = go.Figure()
-                    fig.add_trace(go.Candlestick(x=plot_df.index,
-                            open=plot_df['Open'], high=plot_df['High'],
-                            low=plot_df['Low'], close=plot_df['Close'], name='Market'))
-                    
-                    if 'SMA20' in plot_df.columns:
-                        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['SMA20'], line=dict(color='orange', width=1.5), name='SMA 20'))
-                    if 'SMA50' in plot_df.columns:
-                        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['SMA50'], line=dict(color='blue', width=1.5), name='SMA 50'))
-                    
-                    fig.update_layout(title=f"{name_chart} ({selected_stock}) - Price Action", 
-                                      yaxis_title="Price",
-                                      xaxis_rangeslider_visible=False,
-                                      template="plotly_white",
-                                      height=600)
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    vol_colors = ['green' if plot_df['Close'].iloc[i] >= plot_df['Open'].iloc[i] else 'red' for i in range(len(plot_df))]
-                    vol_fig = go.Figure(go.Bar(x=plot_df.index, y=plot_df['Volume'], name='Volume', marker_color=vol_colors))
-                    vol_fig.update_layout(title="Trading Volume", height=300, template="plotly_white")
-                    st.plotly_chart(vol_fig, use_container_width=True)
-                else:
-                    st.error("Historical price data is too short for charting.")
-            else:
-                st.error(f"Could not load any historical data for {selected_stock}.")
-else:
-    st.info("Add some stocks or futures from the sidebar to see charts.")
-
-st.sidebar.markdown("---")
-show_debug = st.sidebar.checkbox("Show Debug Info")
-if show_debug:
-    st.sidebar.write("Current Watchlist:", st.session_state.watchlist)
-
-st.sidebar.info("Market Discovery scans 30 major KLCI stocks every time the dashboard is initialized or refreshed.")
+    st.sidebar.info("Market Discovery scans 30 major KLCI stocks every time the dashboard is initialized or refreshed.")
 
 # --- TECHNICAL EXPLANATION ---
 with st.expander("ℹ️ How is the Breakout Score calculated?"):
