@@ -77,6 +77,7 @@ def get_stock_data(ticker, period="1y"):
     Fetches historical stock data from Yahoo Finance.
     Handles alternative symbols for futures and prioritizes knowledge base names.
     """
+    ticker = ticker.upper().strip()
     ALT_SYMBOLS = {
         "FKLI=F": ["0001.KL", "FKLI=F", "KLI=F", "^KLCI"],
         "FCPO=F": ["CPO=F", "FCPO=F", "FCP.KL"],
@@ -89,6 +90,13 @@ def get_stock_data(ticker, period="1y"):
     base_name = ticker
     if ticker in MARKET_INSIGHTS:
         base_name = MARKET_INSIGHTS[ticker]['name']
+    else:
+        # Try matching by code (e.g. 6888)
+        code = ticker.split(".")[0]
+        for k, v in MARKET_INSIGHTS.items():
+            if v.get('code') == code:
+                base_name = v['name']
+                break
     
     for symbol in symbols_to_try:
         try:
@@ -100,8 +108,8 @@ def get_stock_data(ticker, period="1y"):
             
             if not df.empty:
                 name = base_name
-                # Only try yfinance info if we don't have a good name yet or if it's a new symbol
-                if name == ticker or ".KL" in name:
+                # Only try yfinance info if we don't have a good name yet
+                if name == ticker or ".KL" in str(name):
                     try:
                         yf_info = stock.info
                         name = yf_info.get('shortName') or yf_info.get('longName') or name
@@ -120,6 +128,7 @@ def analyze_breakout(ticker, df, resolved_name=None):
     if df is None or len(df) < 50:
         return None
 
+    ticker = ticker.upper().strip()
     current_price = df['Close'].iloc[-1]
     
     # Technical Indicators
@@ -127,9 +136,7 @@ def analyze_breakout(ticker, df, resolved_name=None):
     sma_50 = SMAIndicator(df['Close'], window=50).sma_indicator().iloc[-1]
     rsi = RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
     
-    # Breakout Logic:
-    # 1. Price above SMA 20 and SMA 50
-    # 2. Recent volume surge (e.g., today's volume > 1.5x 20-day average)
+    # Breakout Logic
     avg_volume_20 = df['Volume'].rolling(window=20).mean().iloc[-1]
     current_volume = df['Volume'].iloc[-1]
     
@@ -143,23 +150,34 @@ def analyze_breakout(ticker, df, resolved_name=None):
     if is_volume_surge: score += 2
     if is_price_break: score += 2
     
-    # Qualitative Cross-Reference (Priority 1: Knowledge Base)
+    # --- NAME RESOLUTION LOGIC ---
+    name = None
+    code = ticker.split(".")[0]
+    analysis = "Technical breakout analysis based on live data."
+    catalyst = "Market momentum / Trend following."
+
+    # 1. Try exact match in MARKET_INSIGHTS
     insight = MARKET_INSIGHTS.get(ticker)
+    
+    # 2. Try match by code if ticker match fails (e.g. 6888 vs 6888.KL)
+    if not insight:
+        for k, v in MARKET_INSIGHTS.items():
+            if v.get('code') == code:
+                insight = v
+                break
+    
     if insight:
         name = insight["name"]
         code = insight["code"]
         analysis = insight["analysis"]
         catalyst = insight["catalyst"]
     else:
-        # Priority 2: Resolved name from yfinance or symbol cleaning
-        name = resolved_name or ticker.replace(".KL", "")
-        code = ticker.split(".")[0]
-        analysis = "Technical breakout analysis based on live data."
-        catalyst = "Market momentum / Trend following."
-    
-    # Final name cleanup: If name is still a ticker code like "6888.KL", clean it
-    if ".KL" in name and len(name) <= 10:
-        name = name.replace(".KL", "")
+        # 3. Fallback to resolved_name or ticker cleaning
+        name = resolved_name or code
+        
+    # Final cleanup: If name is still just the ticker code, try to clean it
+    if name == ticker or name == code or ".KL" in str(name):
+        name = str(name).replace(".KL", "").strip()
     
     return {
         "ticker": ticker,
