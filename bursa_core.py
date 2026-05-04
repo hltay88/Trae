@@ -9,15 +9,21 @@ import requests
 try:
     import yfinance as yf
     import os
-    # Set a concrete path for cache to avoid TypeError when platformdirs returns None
+    
+    # On Streamlit Cloud or Linux, use /tmp for cache if current dir is not writable
     cache_path = os.path.join(os.getcwd(), ".yfinance_cache")
+    
+    # Check if we are on Streamlit Cloud (usually has 'STREAMLIT_RUNTIME_ENV' or similar)
+    if os.environ.get('STREAMLIT_SERVER_PORT') or not os.access(os.getcwd(), os.W_OK):
+        cache_path = "/tmp/.yfinance_cache"
+        
     if not os.path.exists(cache_path):
         try:
-            os.makedirs(cache_path)
+            os.makedirs(cache_path, exist_ok=True)
         except:
             pass
     
-    # Try multiple ways to disable/redirect cache
+    # Try to set cache location
     try:
         yf.set_tz_cache_location(cache_path)
     except:
