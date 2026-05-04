@@ -5,6 +5,14 @@ from ta.trend import SMAIndicator
 import datetime
 import requests
 
+# Disable yfinance cache to avoid database errors
+import yfinance as yf
+try:
+    import yfinance.cache as yf_cache
+    yf_cache.enabled = False
+except:
+    pass
+
 # --- KNOWLEDGE BASE: LATEST MARKET INSIGHTS (MAY 2026) ---
 MARKET_INSIGHTS = {
     "1155.KL": {
@@ -93,6 +101,8 @@ def get_stock_data(ticker, period="1y"):
     
     for symbol in symbols_to_try:
         try:
+            # Using yfinance's Ticker directly without explicit session
+            # but ensuring we don't use cache if possible
             stock = yf.Ticker(symbol)
             df = stock.history(period=period)
             
@@ -174,9 +184,31 @@ KLCI_COMPONENTS = [
     "8869.KL", "6033.KL", "3816.KL", "1066.KL", "4707.KL",
     "1961.KL", "2445.KL", "4065.KL", "3182.KL", "4715.KL",
     "7277.KL", "4197.KL", "5285.KL", "5681.KL", "1015.KL",
-    "1082.KL", "0166.KL", "5296.KL", "5246.KL", "4677.KL",
-    "FKLI=F", "FCPO=F" # Adding major futures as well
+    "1082.KL", "0166.KL", "5296.KL", "5246.KL", "4677.KL"
 ]
+
+# --- MALAYSIAN FUTURES ---
+FUTURES_COMPONENTS = [
+    "FKLI=F", # FTSE Bursa Malaysia KLCI Futures
+    "FCPO=F", # Crude Palm Oil Futures
+    "FM70=F", # FTSE Bursa Malaysia Mid 70 Index Futures
+    "FMG3=F", # 3-Year MGS Futures
+    "FMG5=F"  # 5-Year MGS Futures
+]
+
+def get_futures_breakouts():
+    """
+    Specifically analyzes Malaysian Futures for breakouts.
+    """
+    results = []
+    # Fetching individually for futures as they often have specific symbol issues
+    for ticker in FUTURES_COMPONENTS:
+        df, name = get_stock_data(ticker, period="1y")
+        if df is not None and not df.empty:
+            analysis = analyze_breakout(ticker, df, name)
+            if analysis:
+                results.append(analysis)
+    return results
 
 def get_top_breakouts(limit=10):
     """
@@ -185,8 +217,7 @@ def get_top_breakouts(limit=10):
     """
     all_results = []
     
-    # We fetch a slightly longer period to ensure we have enough data for indicators
-    # Using a loop for now, but in a real app we'd use yf.download for speed
+    # Using individual fetching for better error handling in this environment
     for ticker in KLCI_COMPONENTS:
         df, resolved_name = get_stock_data(ticker, period="1y")
         if df is not None and not df.empty:
@@ -194,8 +225,7 @@ def get_top_breakouts(limit=10):
             if analysis:
                 all_results.append(analysis)
     
-    # Sort by score descending, then by RSI (to avoid overbought ones if scores are equal)
-    # Actually, if score is equal, we might prefer lower RSI (more room to grow)
+    # Sort by score descending, then by RSI (lower RSI preferred if scores equal)
     all_results.sort(key=lambda x: (x['score'], -x['rsi']), reverse=True)
     
     return all_results[:limit]
