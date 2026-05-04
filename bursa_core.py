@@ -54,6 +54,7 @@ MARKET_INSIGHTS = {
     "5296.KL": {"code": "5296", "name": "MRDIY", "sector": "Consumer", "analysis": "Aggressive store expansion and resilient demand.", "catalyst": "Inflationary environment beneficiary."},
     "5246.KL": {"code": "5246", "name": "WESTPORTS", "sector": "Transportation", "analysis": "Proxy for global trade recovery.", "catalyst": "Port expansion plans."},
     "4677.KL": {"code": "4677", "name": "YTL", "sector": "Conglomerate", "analysis": "Strong performance from utility and data center divisions.", "catalyst": "AI data center development."},
+    "6742.KL": {"code": "6742", "name": "YTLPOWR", "sector": "Utilities", "analysis": "Power & utilities leader with data center-related growth exposure.", "catalyst": "Electricity demand growth and digital infrastructure theme."},
     "7148.KL": {"code": "7148", "name": "DPHARMA", "sector": "Healthcare", "analysis": "Strong local pharmaceutical market share.", "catalyst": "Public healthcare spending."},
     "5099.KL": {"code": "5099", "name": "CAPITALA", "sector": "Aviation", "analysis": "Proxy for regional travel surge.", "catalyst": "AirAsia recovery and digital assets."},
     "FKLI=F": {"code": "FKLI", "name": "KLCI FUTURES", "sector": "Futures", "analysis": "Proxy for the underlying FBM KLCI index. High correlation with banking and utility heavyweights.", "catalyst": "Market sentiment and index component performance."},
@@ -516,6 +517,60 @@ KLCI_COMPONENTS = [
     "1082.KL", "0166.KL", "5296.KL", "5246.KL", "4677.KL"
 ]
 
+STOCK_DISCOVERY_UNIVERSE = sorted(
+    set(
+        KLCI_COMPONENTS
+        + [
+            k
+            for k in MARKET_INSIGHTS.keys()
+            if isinstance(k, str) and k.upper().endswith(".KL")
+        ]
+    )
+)
+
+BURSA_UNIVERSE_FILE = os.path.join(os.path.dirname(__file__), "bursa_universe.csv")
+
+def _load_universe_from_file(path: str):
+    try:
+        if not path or not os.path.exists(path):
+            return []
+        try:
+            df = pd.read_csv(path, dtype=str)
+            cols = [c for c in df.columns if str(c).strip().lower() in {"ticker", "symbol", "code"}]
+            if cols:
+                raw = df[cols[0]].dropna().astype(str).tolist()
+            else:
+                raw = df.iloc[:, 0].dropna().astype(str).tolist()
+        except Exception:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                raw = [line.strip() for line in f.readlines()]
+        out = []
+        for x in raw:
+            s = str(x).strip().upper()
+            if not s:
+                continue
+            if s in {"TICKER", "SYMBOL", "CODE"}:
+                continue
+            s = s.replace(" ", "")
+            if s.startswith("^") or s.endswith("=F") or "." in s:
+                out.append(s)
+                continue
+            if s.isdigit() and len(s) == 4:
+                out.append(f"{s}.KL")
+            else:
+                out.append(f"{s}.KL")
+        return sorted(set(out))
+    except Exception:
+        return []
+
+def get_stock_universe(mode: str = "curated"):
+    m = str(mode or "").lower().strip()
+    if m in {"file", "full", "all"}:
+        u = _load_universe_from_file(BURSA_UNIVERSE_FILE)
+        if u:
+            return u, "file"
+    return STOCK_DISCOVERY_UNIVERSE, "curated"
+
 # --- MALAYSIAN FUTURES ---
 FUTURES_COMPONENTS = [
     "FKLI=F", # FTSE Bursa Malaysia KLCI Futures
@@ -563,9 +618,9 @@ def get_futures_breakouts():
             results.append(analysis)
     return results
 
-def get_top_breakouts(limit=10, model="v2"):
+def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=None):
     """
-    Scans the KLCI components and returns the top N stocks 
+    Scans a stock universe and returns the top N stocks 
     based on their breakout scores.
     """
     all_results = []
@@ -579,8 +634,9 @@ def get_top_breakouts(limit=10, model="v2"):
         except Exception:
             benchmark_df = None
     
+    tickers = universe if universe is not None else get_stock_universe(universe_mode)[0]
     # Using individual fetching for better error handling in this environment
-    for ticker in KLCI_COMPONENTS:
+    for ticker in tickers:
         df, resolved_name = get_stock_data(ticker, period="1y")
         if df is None or df.empty:
             continue

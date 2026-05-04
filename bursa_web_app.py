@@ -197,6 +197,8 @@ popup_mode = _get_query_param("popup")
 
 if "breakout_model" not in st.session_state:
     st.session_state.breakout_model = "v2"
+if "universe_mode" not in st.session_state:
+    st.session_state.universe_mode = "curated"
 
 # --- UI ---
 if not chart_symbol:
@@ -232,13 +234,29 @@ if chart_symbol:
 # Initialize session state for watchlist
 if 'watchlist' not in st.session_state:
     with st.spinner("Initializing Market Discovery..."):
-        top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model)
+        top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model, universe_mode=st.session_state.universe_mode)
         st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
 
 # Sidebar for adding stocks (hide in popup mode)
 if not popup_mode:
     st.sidebar.header("🔍 Market Discovery")
-    st.sidebar.info("Scans 30 major KLCI stocks to identify the strongest technical breakouts.")
+    st.sidebar.info("Scans a Bursa universe to identify the strongest technical breakouts.")
+
+    universe_label = st.sidebar.radio(
+        "Universe",
+        ["Curated (Fast)", "From File (Full)"],
+        index=0 if st.session_state.universe_mode == "curated" else 1,
+        horizontal=True,
+    )
+    selected_universe = "curated" if universe_label.startswith("Curated") else "file"
+    if selected_universe != st.session_state.universe_mode:
+        st.session_state.universe_mode = selected_universe
+        with st.spinner("Refreshing list for selected universe..."):
+            top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model, universe_mode=st.session_state.universe_mode)
+            st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+        st.rerun()
+    if st.session_state.universe_mode == "file":
+        st.sidebar.caption("Universe source: bursa_universe.csv in the app folder. Add one ticker per line (e.g., 6742.KL or 6742).")
 
     model_label = st.sidebar.radio(
         "Breakout Model",
@@ -250,13 +268,13 @@ if not popup_mode:
     if selected_model != st.session_state.breakout_model:
         st.session_state.breakout_model = selected_model
         with st.spinner("Refreshing list for selected model..."):
-            top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model)
+            top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model, universe_mode=st.session_state.universe_mode)
             st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
         st.rerun()
 
     if st.sidebar.button("🔄 Refresh Market Discovery", use_container_width=True):
         with st.spinner("Re-scanning KLCI components..."):
-            top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model)
+            top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model, universe_mode=st.session_state.universe_mode)
             st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
             st.success("Dashboard updated!")
             st.rerun()
@@ -277,7 +295,7 @@ if not popup_mode:
             st.error("Could not find stock. Try using the exact code (e.g., 5347).")
 
     if st.sidebar.button("🗑️ Reset to Top 20", use_container_width=True):
-        top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model)
+        top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model, universe_mode=st.session_state.universe_mode)
         st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
         st.rerun()
 

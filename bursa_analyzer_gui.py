@@ -35,6 +35,24 @@ class BursaAnalyzerGUI:
                                   padx=15, pady=5, relief="flat", cursor="hand2")
         self.scan_btn.pack(side="left")
 
+        self.universe_mode = tk.StringVar(value="curated")
+        tk.Radiobutton(
+            self.control_frame,
+            text="Curated",
+            variable=self.universe_mode,
+            value="curated",
+            bg="#f0f2f5",
+            command=self.start_scan,
+        ).pack(side="left", padx=(15, 0))
+        tk.Radiobutton(
+            self.control_frame,
+            text="From File",
+            variable=self.universe_mode,
+            value="file",
+            bg="#f0f2f5",
+            command=self.start_scan,
+        ).pack(side="left", padx=(5, 0))
+
         # Add Search Bar
         tk.Label(self.control_frame, text="Stock Name / Code:", font=("Helvetica", 10, "bold"), bg="#f0f2f5").pack(side="left", padx=(20, 5))
         self.search_entry = tk.Entry(self.control_frame, font=("Helvetica", 10), width=20)
@@ -270,8 +288,9 @@ class BursaAnalyzerGUI:
 
     def run_analysis(self):
         # 1. Scan Stocks
-        self.status_label.config(text="Scanning 30+ stocks for top breakouts...")
-        top_results = get_top_breakouts(limit=20, model="v2")
+        u_mode = self.universe_mode.get() if hasattr(self, "universe_mode") else "curated"
+        self.status_label.config(text=f"Scanning stock universe ({u_mode}) for top breakouts...")
+        top_results = get_top_breakouts(limit=20, model="v2", universe_mode=u_mode)
         
         # Add custom tickers to the results as well
         for ticker in self.custom_tickers:
