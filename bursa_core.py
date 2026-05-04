@@ -113,9 +113,9 @@ def get_stock_data(ticker, period="1y"):
     Handles alternative symbols for futures.
     """
     ALT_SYMBOLS = {
-        "FKLI=F": ["FKLI=F", "KLI=F", "^KLCI"],
-        "FCPO=F": ["FCPO=F", "CPO=F", "FCP.KL"],
-        "FM70=F": ["FM70=F", "^KL70"]
+        "FKLI=F": ["0001.KL", "FKLI=F", "KLI=F", "^KLCI"],
+        "FCPO=F": ["CPO=F", "FCPO=F", "FCP.KL"],
+        "FM70=F": ["^KL70", "FM70=F"]
     }
     
     symbols_to_try = ALT_SYMBOLS.get(ticker, [ticker])
