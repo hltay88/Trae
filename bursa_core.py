@@ -13,7 +13,7 @@ try:
     # On Streamlit Cloud or Linux, use /tmp for cache if current dir is not writable
     cache_path = os.path.join(os.getcwd(), ".yfinance_cache")
     
-    # Check if we are on Streamlit Cloud (usually has 'STREAMLIT_RUNTIME_ENV' or similar)
+    # Check if we are on Streamlit Cloud
     if os.environ.get('STREAMLIT_SERVER_PORT') or not os.access(os.getcwd(), os.W_OK):
         cache_path = "/tmp/.yfinance_cache"
         
@@ -23,11 +23,16 @@ try:
         except:
             pass
     
-    # Try to set cache location
+    # CRITICAL: Completely disable cache if it causes issues, or set to writable path
     try:
         yf.set_tz_cache_location(cache_path)
-    except:
-        pass
+    except Exception:
+        try:
+            # Fallback: Disable cache entirely to avoid peewee errors
+            import yfinance.cache as yf_cache
+            yf_cache._db.close()
+        except:
+            pass
     
     os.environ['YFINANCE_CACHE_DIR'] = cache_path
 except Exception:
@@ -79,9 +84,9 @@ def get_stock_data(ticker, period="1y"):
     """
     ticker = ticker.upper().strip()
     ALT_SYMBOLS = {
-        "FKLI=F": ["FKLI=F", "^KLCI", "FKLIK26.KL", "FKLIM26.KL"],
-        "FCPO=F": ["FCPO=F", "FCPON26.KL", "FCPOK26.KL", "FCPOM26.KL"],
-        "FM70=F": ["FM70=F", "^KL70", "FM70K26.KL", "FM70M26.KL"]
+        "FKLI=F": ["^KLSE", "FKLI=F", "FKLIK26.KL", "FKLIM26.KL"],
+        "FCPO=F": ["FCPO=F", "CPO=F", "FCPON26.KL", "FCPOK26.KL"],
+        "FM70=F": ["FBM70.FGI", "FM70=F", "^KL70", "FM70K26.KL"]
     }
     
     symbols_to_try = ALT_SYMBOLS.get(ticker, [ticker])
@@ -120,35 +125,41 @@ def get_stock_data(ticker, period="1y"):
             continue
     return None, base_name
 
-def analyze_breakout(ticker, df, resolved_name=None):
+def analyze_breakout(ticker, df, resolved_name=None, min_rows=50):
     """
     Performs technical breakout analysis.
     Returns a dictionary with results.
     """
-    if df is None or len(df) < 50:
+    if df is None or len(df) < min_rows:
         return None
 
     ticker = ticker.upper().strip()
     current_price = df['Close'].iloc[-1]
     
-    # Technical Indicators
-    sma_20 = SMAIndicator(df['Close'], window=20).sma_indicator().iloc[-1]
-    sma_50 = SMAIndicator(df['Close'], window=50).sma_indicator().iloc[-1]
-    rsi = RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
-    
-    # Breakout Logic
-    avg_volume_20 = df['Volume'].rolling(window=20).mean().iloc[-1]
-    current_volume = df['Volume'].iloc[-1]
-    
-    is_above_sma = current_price > sma_20 and current_price > sma_50
-    is_volume_surge = current_volume > (avg_volume_20 * 1.5)
-    is_price_break = current_price > df['Close'].iloc[-20:-1].max() # 20-day high
-    
-    # Scoring
-    score = 0
-    if is_above_sma: score += 1
-    if is_volume_surge: score += 2
-    if is_price_break: score += 2
+    # Technical Indicators (Safe checks for short data)
+    try:
+        sma_20 = SMAIndicator(df['Close'], window=20).sma_indicator().iloc[-1]
+        sma_50 = SMAIndicator(df['Close'], window=50).sma_indicator().iloc[-1]
+        rsi = RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
+        
+        # Breakout Logic
+        avg_volume_20 = df['Volume'].rolling(window=20).mean().iloc[-1]
+        current_volume = df['Volume'].iloc[-1]
+        
+        is_above_sma = current_price > sma_20 and current_price > sma_50
+        is_volume_surge = current_volume > (avg_volume_20 * 1.5)
+        is_price_break = current_price > df['Close'].iloc[-20:-1].max() # 20-day high
+        
+        # Scoring
+        score = 0
+        if is_above_sma: score += 1
+        if is_volume_surge: score += 2
+        if is_price_break: score += 2
+    except:
+        # Fallback for very short data (e.g. newly listed or restricted history)
+        rsi = 50.0
+        score = 1
+        is_volume_surge = False
     
     # --- NAME RESOLUTION LOGIC ---
     name = None
@@ -205,9 +216,7 @@ KLCI_COMPONENTS = [
 FUTURES_COMPONENTS = [
     "FKLI=F", # FTSE Bursa Malaysia KLCI Futures
     "FCPO=F", # Crude Palm Oil Futures
-    "FM70=F", # FTSE Bursa Malaysia Mid 70 Index Futures
-    "FMG3=F", # 3-Year MGS Futures
-    "FMG5=F"  # 5-Year MGS Futures
+    "FM70=F"  # FTSE Bursa Malaysia Mid 70 Index Futures
 ]
 
 def get_futures_breakouts():
@@ -217,9 +226,15 @@ def get_futures_breakouts():
     results = []
     # Fetching individually for futures as they often have specific symbol issues
     for ticker in FUTURES_COMPONENTS:
-        df, name = get_stock_data(ticker, period="1y")
+        # Try a longer period for futures indices
+        df, name = get_stock_data(ticker, period="2y")
+        
         if df is not None and not df.empty:
-            analysis = analyze_breakout(ticker, df, name)
+            # Be slightly more lenient with row count for futures
+            # If it's a major index with very short history (like FBM70.FGI),
+            # we provide a fallback row count.
+            min_r = 30 if len(df) >= 30 else len(df)
+            analysis = analyze_breakout(ticker, df, name, min_rows=min_r)
             if analysis:
                 results.append(analysis)
     return results
