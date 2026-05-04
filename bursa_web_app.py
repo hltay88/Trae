@@ -60,8 +60,10 @@ def _render_chart(symbol: str):
     "style": "1",
     "locale": "en",
     "enable_publishing": false,
-    "hide_side_toolbar": false,
-    "allow_symbol_change": true,
+    "hide_top_toolbar": true,
+    "hide_legend": false,
+    "hide_side_toolbar": true,
+    "allow_symbol_change": false,
     "save_image": false,
     "container_id": "tradingview_widget"
   }});
@@ -150,9 +152,10 @@ chart_symbol = _get_query_param("chart")
 popup_mode = _get_query_param("popup")
 
 # --- UI ---
-st.title("📈 Bursa Malaysia Breakout Analyzer")
-st.subheader("Dynamic Market Scanner & Research Tool")
-st.markdown("---")
+if not chart_symbol:
+    st.title("📈 Bursa Malaysia Breakout Analyzer")
+    st.subheader("Dynamic Market Scanner & Research Tool")
+    st.markdown("---")
 
 st.markdown(
     """
@@ -170,9 +173,13 @@ a:hover { text-decoration: underline; }
 
 # Popup/new-tab chart view (opened from table clicks)
 if chart_symbol:
+    st.markdown(
+        f"### {chart_symbol} — Chart",
+    )
+    st.caption("This is an in-app chart view. Use the link below to return to the dashboard.")
     with st.spinner(f"Loading chart for {chart_symbol}..."):
         _render_chart(chart_symbol)
-    st.markdown(f"[Back to Dashboard](/)")
+    st.markdown("[Back to Dashboard](/)")
     st.stop()
 
 # Initialize session state for watchlist
