@@ -1,7 +1,3 @@
-import yfinance as yf
-import pandas as pd
-from ta.momentum import RSIIndicator
-from ta.trend import SMAIndicator
 import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -10,7 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
-from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, search_bursa, get_top_breakouts, KLCI_COMPONENTS
+from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, search_bursa, get_top_breakouts, KLCI_COMPONENTS, get_futures_breakouts
 
 class BursaAnalyzerGUI:
     def __init__(self, root):

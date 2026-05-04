@@ -6,11 +6,10 @@ import datetime
 import requests
 
 # Disable yfinance cache to avoid database errors
-import yfinance as yf
 try:
     import yfinance.cache as yf_cache
     yf_cache.enabled = False
-except:
+except Exception:
     pass
 
 # --- KNOWLEDGE BASE: LATEST MARKET INSIGHTS (MAY 2026) ---
