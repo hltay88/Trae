@@ -7,8 +7,23 @@ import requests
 
 # Disable yfinance cache to avoid database errors
 try:
-    import yfinance.cache as yf_cache
-    yf_cache.enabled = False
+    import yfinance as yf
+    import os
+    # Set a concrete path for cache to avoid TypeError when platformdirs returns None
+    cache_path = os.path.join(os.getcwd(), ".yfinance_cache")
+    if not os.path.exists(cache_path):
+        try:
+            os.makedirs(cache_path)
+        except:
+            pass
+    
+    # Try multiple ways to disable/redirect cache
+    try:
+        yf.set_tz_cache_location(cache_path)
+    except:
+        pass
+    
+    os.environ['YFINANCE_CACHE_DIR'] = cache_path
 except Exception:
     pass
 
@@ -93,7 +108,8 @@ def get_stock_data(ticker, period="1y"):
     """
     ALT_SYMBOLS = {
         "FKLI=F": ["FKLI=F", "KLI=F", "^KLCI"],
-        "FCPO=F": ["FCPO=F", "CPO=F", "FCP.KL"]
+        "FCPO=F": ["FCPO=F", "CPO=F", "FCP.KL"],
+        "FM70=F": ["FM70=F", "^KL70"]
     }
     
     symbols_to_try = ALT_SYMBOLS.get(ticker, [ticker])

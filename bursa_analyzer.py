@@ -32,7 +32,12 @@ if __name__ == "__main__":
     
     # If user provides custom codes in terminal: e.g. python bursa_analyzer.py 1023 5347
     if len(sys.argv) > 1:
-        custom_tickers = [f"{arg}.KL" if ".KL" not in arg else arg for arg in sys.argv[1:]]
+        custom_tickers = []
+        for arg in sys.argv[1:]:
+            if ".KL" in arg or "=F" in arg or "^" in arg:
+                custom_tickers.append(arg)
+            else:
+                custom_tickers.append(f"{arg}.KL")
         watchlist = custom_tickers
 
     analyzer = BursaAnalyzer(watchlist)

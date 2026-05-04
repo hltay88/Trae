@@ -51,11 +51,14 @@ class BursaAnalyzerGUI:
 
         # Keep track of custom tickers
         self.custom_tickers = []
-        self.watchlist = []
 
-        # Table Frame
-        self.table_frame = tk.Frame(self.root, bg="white")
-        self.table_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        # Notebook for Tabs
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=20, pady=10)
+
+        # Table Frame (Stocks)
+        self.table_frame = tk.Frame(self.notebook, bg="white")
+        self.notebook.add(self.table_frame, text="  📊 STOCKS  ")
 
         columns = ("code", "name", "price", "score", "rsi", "analysis", "catalyst")
         self.tree = ttk.Treeview(self.table_frame, columns=columns, show="headings")
@@ -85,20 +88,41 @@ class BursaAnalyzerGUI:
         self.tree.pack(side="left", fill="both", expand=True)
         self.scrollbar.pack(side="right", fill="y")
         
+        # Futures Frame
+        self.futures_frame = tk.Frame(self.notebook, bg="white")
+        self.notebook.add(self.futures_frame, text="  ⛓️ FUTURES  ")
+
+        self.futures_tree = ttk.Treeview(self.futures_frame, columns=columns, show="headings")
+        for col in columns:
+            self.futures_tree.heading(col, text=self.tree.heading(col)["text"])
+            self.futures_tree.column(col, width=self.tree.column(col)["width"], anchor=self.tree.column(col)["anchor"])
+        
+        self.f_scrollbar = ttk.Scrollbar(self.futures_frame, orient="vertical", command=self.futures_tree.yview)
+        self.futures_tree.configure(yscrollcommand=self.f_scrollbar.set)
+        self.futures_tree.pack(side="left", fill="both", expand=True)
+        self.f_scrollbar.pack(side="right", fill="y")
+
         # Bind double-click to show chart
         self.tree.bind("<Double-1>", self.on_stock_double_click)
+        self.futures_tree.bind("<Double-1>", self.on_stock_double_click)
 
         # Color Tags for Scores
-        self.tree.tag_configure("high_score", background="#e8f5e9", foreground="#2e7d32") # Green
-        self.tree.tag_configure("mid_score", background="#fffde7", foreground="#fbc02d")  # Yellow
-        self.tree.tag_configure("low_score", background="#ffebee", foreground="#c62828")  # Red
+        for t in [self.tree, self.futures_tree]:
+            t.tag_configure("high_score", background="#e8f5e9", foreground="#2e7d32") # Green
+            t.tag_configure("mid_score", background="#fffde7", foreground="#fbc02d")  # Yellow
+            t.tag_configure("low_score", background="#ffebee", foreground="#c62828")  # Red
 
         # Initial scan
         self.start_scan()
 
     def on_stock_double_click(self, event):
-        item = self.tree.selection()[0]
-        values = self.tree.item(item, "values")
+        # Determine which tree was clicked
+        tree = event.widget
+        selection = tree.selection()
+        if not selection: return
+        
+        item = selection[0]
+        values = tree.item(item, "values")
         code = values[0]
         name = values[1]
         
@@ -106,6 +130,7 @@ class BursaAnalyzerGUI:
         ticker = f"{code}.KL"
         if code == "FKLI": ticker = "FKLI=F"
         elif code == "FCPO": ticker = "FCPO=F"
+        elif code == "FM70": ticker = "FM70=F"
         
         # Show loading message
         self.status_label.config(text=f"Generating chart for {name}...")
@@ -114,11 +139,14 @@ class BursaAnalyzerGUI:
 
     def show_chart_window(self, ticker, name):
         try:
-            stock = yf.Ticker(ticker)
-            # Fetch 5 years of data for the full view
-            df = stock.history(period="5y") 
-            if df.empty:
-                self.root.after(0, lambda: messagebox.showerror("Error", "Could not fetch chart data."))
+            # Using get_stock_data from bursa_core which has the fix
+            df, resolved_name = get_stock_data(ticker, period="5y")
+            if df is None or df.empty:
+                # Try 1y if 5y fails
+                df, resolved_name = get_stock_data(ticker, period="1y")
+                
+            if df is None or df.empty:
+                self.root.after(0, lambda: messagebox.showerror("Error", f"Could not fetch chart data for {ticker}."))
                 return
 
             # Create popup window
@@ -237,10 +265,11 @@ class BursaAnalyzerGUI:
         self.add_btn.config(state="disabled")
         self.status_label.config(text="Fetching live Bursa data... please wait.")
         for item in self.tree.get_children(): self.tree.delete(item)
+        for item in self.futures_tree.get_children(): self.futures_tree.delete(item)
         threading.Thread(target=self.run_analysis, daemon=True).start()
 
     def run_analysis(self):
-        # On a refresh/start scan, we find the top 10 from KLCI components
+        # 1. Scan Stocks
         self.status_label.config(text="Scanning 30+ stocks for top breakouts...")
         top_results = get_top_breakouts(limit=10)
         
@@ -249,17 +278,30 @@ class BursaAnalyzerGUI:
             df, resolved_name = get_stock_data(ticker)
             res = analyze_breakout(ticker, df, resolved_name)
             if res:
-                # Avoid duplicates if a custom ticker is already in top_results
                 if not any(r['ticker'] == ticker for r in top_results):
                     top_results.append(res)
         
-        # Insert into tree
+        # Insert into stocks tree
         for res in top_results:
             tag = "low_score"
             if res['score'] >= 4: tag = "high_score"
             elif res['score'] >= 2: tag = "mid_score"
             
             self.tree.insert("", "end", values=(
+                res['code'], res['name'], res['price'], 
+                f"{res['score']} / 5", res['rsi'], res['analysis'], res['catalyst']
+            ), tags=(tag,))
+
+        # 2. Scan Futures
+        self.status_label.config(text="Analyzing Malaysian Futures market...")
+        futures_results = get_futures_breakouts()
+        
+        for res in futures_results:
+            tag = "low_score"
+            if res['score'] >= 4: tag = "high_score"
+            elif res['score'] >= 2: tag = "mid_score"
+            
+            self.futures_tree.insert("", "end", values=(
                 res['code'], res['name'], res['price'], 
                 f"{res['score']} / 5", res['rsi'], res['analysis'], res['catalyst']
             ), tags=(tag,))
