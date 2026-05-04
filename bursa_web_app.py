@@ -95,6 +95,20 @@ st.title("📈 Bursa Malaysia Breakout Analyzer")
 st.subheader("Dynamic Market Scanner & Research Tool")
 st.markdown("---")
 
+st.markdown(
+    """
+<style>
+table { width: 100%; border-collapse: collapse; color: var(--text-color); }
+thead th { background: var(--secondary-background-color); color: var(--text-color); border-bottom: 1px solid rgba(255,255,255,0.12); padding: 8px; text-align: left; }
+tbody td { color: var(--text-color); border-bottom: 1px solid rgba(255,255,255,0.08); padding: 8px; }
+tbody tr:hover { background: rgba(255,255,255,0.04); }
+a { color: var(--primary-color); text-decoration: none; }
+a:hover { text-decoration: underline; }
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 # Popup/new-tab chart view (opened from table clicks)
 if chart_symbol:
     with st.spinner(f"Loading chart for {chart_symbol}..."):
@@ -177,7 +191,7 @@ with tab_stocks:
             display_rows.append({
                 "Ticker": r['ticker'],
                 "Name": linked_name,
-                "Price (RM)": r['price'],
+                "Last Price (RM)": f"{float(r['price']):.2f}",
                 "Score": f"{r['score']}/5",
                 "RSI": r['rsi'],
                 "Status": "🔥 STRONG" if r['score'] >= 4 else ("⚖️ NEUTRAL" if r['score'] >= 2 else "❄️ WEAK"),
@@ -206,7 +220,7 @@ with tab_futures:
             futures_display.append({
                 "Future Contract": linked_name,
                 "Ticker": r['ticker'],
-                "Last Price (RM)": r['price'],
+                "Last Price (RM)": f"{float(r['price']):.2f}",
                 "Breakout Score": f"{r['score']}/5",
                 "RSI": r['rsi'],
                 "Momentum": "🚀 BULLISH" if r['score'] >= 4 else ("⚖️ SIDEWAYS" if r['score'] >= 2 else "📉 BEARISH"),

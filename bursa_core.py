@@ -172,6 +172,20 @@ def analyze_breakout(ticker, df, resolved_name=None, min_rows=50):
     if df is None or len(df) < min_rows:
         return None
 
+    if len(df) >= 2:
+        try:
+            last_close = df["Close"].iloc[-1] if "Close" in df.columns else None
+            last_open = df["Open"].iloc[-1] if "Open" in df.columns else None
+            if (pd.isna(last_close) or pd.isna(last_open)):
+                df = df.iloc[:-1]
+            elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0:
+                df = df.iloc[:-1]
+        except Exception:
+            pass
+
+    if df is None or len(df) < min_rows:
+        return None
+
     ticker = ticker.upper().strip()
     current_price = df['Close'].iloc[-1]
     
@@ -270,14 +284,34 @@ def get_futures_breakouts():
         # Try a longer period for futures indices
         df, name = get_stock_data(ticker, period="2y")
         
-        if df is not None and not df.empty:
-            # Be slightly more lenient with row count for futures
-            # If it's a major index with very short history (like FBM70.FGI),
-            # we provide a fallback row count.
-            min_r = 30 if len(df) >= 30 else len(df)
-            analysis = analyze_breakout(ticker, df, name, min_rows=min_r)
-            if analysis:
-                results.append(analysis)
+        if df is None or df.empty:
+            continue
+
+        if len(df) >= 2:
+            try:
+                last_close = df["Close"].iloc[-1] if "Close" in df.columns else None
+                last_open = df["Open"].iloc[-1] if "Open" in df.columns else None
+                if (pd.isna(last_close) or pd.isna(last_open)):
+                    df = df.iloc[:-1]
+                elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0:
+                    df = df.iloc[:-1]
+            except Exception:
+                pass
+
+        try:
+            last_close = float(df["Close"].iloc[-1])
+            if not (last_close > 0.0):
+                continue
+        except Exception:
+            continue
+
+        # Be slightly more lenient with row count for futures
+        # If it's a major index with very short history (like FBM70.FGI),
+        # we provide a fallback row count.
+        min_r = 30 if len(df) >= 30 else len(df)
+        analysis = analyze_breakout(ticker, df, name, min_rows=min_r)
+        if analysis:
+            results.append(analysis)
     return results
 
 def get_top_breakouts(limit=10):
@@ -290,10 +324,38 @@ def get_top_breakouts(limit=10):
     # Using individual fetching for better error handling in this environment
     for ticker in KLCI_COMPONENTS:
         df, resolved_name = get_stock_data(ticker, period="1y")
-        if df is not None and not df.empty:
-            analysis = analyze_breakout(ticker, df, resolved_name)
-            if analysis:
-                all_results.append(analysis)
+        if df is None or df.empty:
+            continue
+
+        if len(df) >= 2:
+            try:
+                last_close = df["Close"].iloc[-1] if "Close" in df.columns else None
+                last_open = df["Open"].iloc[-1] if "Open" in df.columns else None
+                if (pd.isna(last_close) or pd.isna(last_open)):
+                    df = df.iloc[:-1]
+                elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0:
+                    df = df.iloc[:-1]
+            except Exception:
+                pass
+
+        try:
+            last_close = float(df["Close"].iloc[-1])
+            if not (last_close > 0.0):
+                continue
+        except Exception:
+            continue
+
+        try:
+            if "Volume" in df.columns:
+                tail_vol = pd.to_numeric(df["Volume"].tail(5), errors="coerce")
+                if tail_vol.fillna(0).max() <= 0:
+                    continue
+        except Exception:
+            continue
+
+        analysis = analyze_breakout(ticker, df, resolved_name)
+        if analysis:
+            all_results.append(analysis)
     
     # Sort by score descending, then by RSI (lower RSI preferred if scores equal)
     all_results.sort(key=lambda x: (x['score'], -x['rsi']), reverse=True)
