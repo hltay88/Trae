@@ -4,6 +4,7 @@ from ta.momentum import RSIIndicator
 from ta.trend import SMAIndicator
 import datetime
 import requests
+import re
 
 # Disable yfinance cache to avoid database errors
 try:
@@ -77,19 +78,57 @@ MARKET_INSIGHTS = {
     "FM70=F": {"code": "FM70", "name": "MID 70 FUTURES", "sector": "Futures", "analysis": "Proxy for the FBM Mid 70 Index, representing mid-cap growth stocks.", "catalyst": "Domestic liquidity and mid-cap earnings momentum."}
 }
 
+def _tradingview_last_price_myr(symbol_path: str):
+    try:
+        url = f"https://www.tradingview.com/symbols/{symbol_path}/"
+        html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15).text
+        m = re.search(r"([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*MYR", html)
+        if not m:
+            return None
+        return float(m.group(1).replace(",", ""))
+    except Exception:
+        return None
+
+
+def _synthetic_price_df(price: float, rows: int = 90):
+    idx = pd.date_range(end=pd.Timestamp.now(tz="Asia/Kuala_Lumpur"), periods=rows, freq="B")
+    df = pd.DataFrame(
+        {
+            "Open": price,
+            "High": price,
+            "Low": price,
+            "Close": price,
+            "Volume": 0,
+        },
+        index=idx,
+    )
+    return df
+
+
 def get_stock_data(ticker, period="1y"):
     """
     Fetches historical stock data from Yahoo Finance.
     Handles alternative symbols for futures and prioritizes knowledge base names.
     """
     ticker = ticker.upper().strip()
+
+    if ticker == "FKLI=F":
+        price = _tradingview_last_price_myr("MYX-FKLI1!")
+        if price is not None:
+            return _synthetic_price_df(price), MARKET_INSIGHTS.get("FKLI=F", {}).get("name", "KLCI FUTURES")
+
+    if ticker == "FCPO=F":
+        price = _tradingview_last_price_myr("MYX-FCPO1!")
+        if price is not None:
+            return _synthetic_price_df(price), MARKET_INSIGHTS.get("FCPO=F", {}).get("name", "CPO FUTURES")
+
     ALT_SYMBOLS = {
-        "FKLI=F": ["^KLSE", "FKLI=F", "FKLIK26.KL", "FKLIM26.KL"],
-        "FCPO=F": ["FCPO=F", "CPO=F", "FCPON26.KL", "FCPOK26.KL"],
-        "FM70=F": ["FBM70.FGI", "FM70=F", "^KL70", "FM70K26.KL"]
+        "FKLI=F": ["^KLSE"],
+        "FCPO=F": [],
+        "FM70=F": ["FBM70.FGI"]
     }
     
-    symbols_to_try = ALT_SYMBOLS.get(ticker, [ticker])
+    symbols_to_try = ALT_SYMBOLS.get(ticker, [ticker]) or [ticker]
     
     # Prioritize name from knowledge base
     base_name = ticker
@@ -141,6 +180,8 @@ def analyze_breakout(ticker, df, resolved_name=None, min_rows=50):
         sma_20 = SMAIndicator(df['Close'], window=20).sma_indicator().iloc[-1]
         sma_50 = SMAIndicator(df['Close'], window=50).sma_indicator().iloc[-1]
         rsi = RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
+        if pd.isna(rsi):
+            rsi = 50.0
         
         # Breakout Logic
         avg_volume_20 = df['Volume'].rolling(window=20).mean().iloc[-1]
@@ -194,9 +235,9 @@ def analyze_breakout(ticker, df, resolved_name=None, min_rows=50):
         "ticker": ticker,
         "code": code,
         "name": name,
-        "price": round(current_price, 3),
-        "rsi": round(rsi, 2),
-        "volume_surge": is_volume_surge,
+        "price": float(round(float(current_price), 3)),
+        "rsi": float(round(float(rsi), 2)),
+        "volume_surge": bool(is_volume_surge),
         "score": score,
         "analysis": analysis,
         "catalyst": catalyst

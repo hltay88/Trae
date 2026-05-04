@@ -95,35 +95,6 @@ st.title("📈 Bursa Malaysia Breakout Analyzer")
 st.subheader("Dynamic Market Scanner & Research Tool")
 st.markdown("---")
 
-if "auto_refresh" not in st.session_state:
-    st.session_state.auto_refresh = True
-if "refresh_seconds" not in st.session_state:
-    st.session_state.refresh_seconds = 60
-if "auto_top10" not in st.session_state:
-    st.session_state.auto_top10 = True
-
-if not chart_symbol:
-    st.sidebar.header("⚙️ Auto Refresh")
-    st.session_state.auto_refresh = st.sidebar.checkbox(
-        "Enable auto-refresh", value=bool(st.session_state.auto_refresh)
-    )
-    st.session_state.refresh_seconds = st.sidebar.selectbox(
-        "Refresh interval (seconds)",
-        options=[15, 30, 60, 120, 300],
-        index=[15, 30, 60, 120, 300].index(int(st.session_state.refresh_seconds))
-        if int(st.session_state.refresh_seconds) in [15, 30, 60, 120, 300]
-        else 2,
-    )
-    st.session_state.auto_top10 = st.sidebar.checkbox(
-        "Auto-update Top 10 on refresh", value=bool(st.session_state.auto_top10)
-    )
-
-    if st.session_state.auto_refresh:
-        st.markdown(
-            f"<meta http-equiv='refresh' content='{int(st.session_state.refresh_seconds)}'>",
-            unsafe_allow_html=True,
-        )
-
 # Popup/new-tab chart view (opened from table clicks)
 if chart_symbol:
     with st.spinner(f"Loading chart for {chart_symbol}..."):
@@ -135,10 +106,6 @@ if chart_symbol:
 if 'watchlist' not in st.session_state:
     with st.spinner("Initializing Market Discovery..."):
         # Get top 10 breakouts from KLCI components on first load
-        top_breakouts = get_top_breakouts(limit=10)
-        st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
-elif not chart_symbol and bool(st.session_state.auto_top10):
-    with st.spinner("Refreshing Top 10 breakouts..."):
         top_breakouts = get_top_breakouts(limit=10)
         st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
 
@@ -239,7 +206,7 @@ with tab_futures:
             futures_display.append({
                 "Future Contract": linked_name,
                 "Ticker": r['ticker'],
-                "Last Price": r['price'],
+                "Last Price (RM)": r['price'],
                 "Breakout Score": f"{r['score']}/5",
                 "RSI": r['rsi'],
                 "Momentum": "🚀 BULLISH" if r['score'] >= 4 else ("⚖️ SIDEWAYS" if r['score'] >= 2 else "📉 BEARISH"),
