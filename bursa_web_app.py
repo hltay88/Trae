@@ -1,3 +1,12 @@
+import runpy
+import sys
+from pathlib import Path
+
+root_dir = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(root_dir))
+runpy.run_path(str(root_dir / "bursa_web_app.py"), run_name="__main__")
+raise SystemExit
+
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
@@ -263,6 +272,12 @@ if 'watchlist' not in st.session_state:
 if not popup_mode:
     st.sidebar.header("🔍 Market Discovery")
     st.sidebar.info("Scans a Bursa universe to identify the strongest technical breakouts.")
+    try:
+        import bursa_core as _core
+        st.sidebar.caption(f"App: {__file__}")
+        st.sidebar.caption(f"Core: {_core.__file__}")
+    except Exception:
+        pass
 
     universe_list, universe_src = get_stock_universe(st.session_state.universe_mode)
     st.sidebar.caption(f"Universe loaded: {len(universe_list)} tickers ({universe_src})")

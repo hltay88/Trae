@@ -20,7 +20,7 @@ if not exist ".yfinance_cache" (
 
 :: Run the Streamlit web app
 :: Using the specific python path and running streamlit as a module
-"C:\Users\lawre\AppData\Local\Python\pythoncore-3.14-64\python.exe" -m streamlit run bursa_web_app.py
+"C:\Users\lawre\AppData\Local\Python\pythoncore-3.14-64\python.exe" -m streamlit run ..\bursa_web_app.py
 
 if %ERRORLEVEL% neq 0 (
     echo.
