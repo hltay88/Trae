@@ -1,11 +1,14 @@
-import runpy
 import sys
 from pathlib import Path
 
 root_dir = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(root_dir))
-runpy.run_path(str(root_dir / "bursa_web_app.py"), run_name="__main__")
-raise SystemExit
+root_app = root_dir / "bursa_web_app.py"
+if root_app.exists() and root_app.resolve() != Path(__file__).resolve():
+    sys.path.insert(0, str(root_dir))
+    import runpy
+
+    runpy.run_path(str(root_app), run_name="__main__")
+    raise SystemExit
 
 import streamlit as st
 import plotly.graph_objects as go
