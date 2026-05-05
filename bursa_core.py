@@ -284,6 +284,35 @@ def _resolve_insight(ticker: str, resolved_name: str | None):
 
     return code, name, analysis, catalyst
 
+
+def _resolve_insight_v3(ticker: str, resolved_name: str | None):
+    t = str(ticker).upper().strip()
+    code = t.split(".")[0]
+    analysis = "Technical breakout analysis based on live data."
+    catalyst = "Market momentum / Trend following."
+    sector = "Unknown"
+
+    insight = MARKET_INSIGHTS.get(t)
+    if not insight:
+        for _, v in MARKET_INSIGHTS.items():
+            if v.get("code") == code:
+                insight = v
+                break
+
+    if insight:
+        name = insight["name"]
+        code = insight["code"]
+        analysis = insight["analysis"]
+        catalyst = insight["catalyst"]
+        sector = str(insight.get("sector") or sector).strip() or sector
+    else:
+        name = resolved_name or code
+
+    if name == t or name == code or ".KL" in str(name):
+        name = str(name).replace(".KL", "").strip()
+
+    return code, name, sector, analysis, catalyst
+
 def analyze_breakout(ticker, df, resolved_name=None, min_rows=50):
     """
     Performs technical breakout analysis.
@@ -507,6 +536,278 @@ def analyze_breakout_v2(ticker, df, resolved_name=None, benchmark_df=None, min_r
         "model": "v2",
     }
 
+
+def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_rows=120, signal_lookback=5, max_runup_pct=None):
+    if df is None or len(df) < min_rows:
+        return None
+
+    if len(df) >= 2:
+        try:
+            last_close = df["Close"].iloc[-1] if "Close" in df.columns else None
+            last_open = df["Open"].iloc[-1] if "Open" in df.columns else None
+            if (pd.isna(last_close) or pd.isna(last_open)):
+                df = df.iloc[:-1]
+            elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0 and not _is_today_kl(df.index[-1]):
+                df = df.iloc[:-1]
+        except Exception:
+            pass
+
+    if df is None or len(df) < min_rows:
+        return None
+
+    ticker = str(ticker).upper().strip()
+    df = df.copy()
+    for c in ["Open", "High", "Low", "Close", "Volume"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    try:
+        current_close = float(df["Close"].iloc[-1])
+        if not (current_close > 0.0):
+            return None
+    except Exception:
+        return None
+
+    rsi = 50.0
+    try:
+        rsi_v = RSIIndicator(df["Close"], window=14).rsi().iloc[-1]
+        if rsi_v == rsi_v:
+            rsi = float(rsi_v)
+    except Exception:
+        pass
+
+    sma50 = sma200 = None
+    try:
+        sma50 = float(SMAIndicator(df["Close"], window=50).sma_indicator().iloc[-1])
+        if len(df) >= 220:
+            sma200 = float(SMAIndicator(df["Close"], window=200).sma_indicator().iloc[-1])
+    except Exception:
+        pass
+
+    score = 0
+    score_max = 11
+
+    try:
+        if sma50 is not None and current_close > sma50:
+            sma50_prev = float(SMAIndicator(df["Close"], window=50).sma_indicator().iloc[-6])
+            if sma50_prev == sma50_prev and sma50 > sma50_prev:
+                score += 2
+    except Exception:
+        pass
+
+    try:
+        if sma200 is not None and current_close > sma200:
+            sma200_prev = float(SMAIndicator(df["Close"], window=200).sma_indicator().iloc[-6])
+            if sma200_prev == sma200_prev and sma200 > sma200_prev:
+                score += 2
+    except Exception:
+        pass
+
+    breakout_lookback = 55
+
+    breakout_candle = False
+    breakout_candle_valid = False
+    breakout_55 = False
+    power_candle = False
+    volume_spike = False
+    breakout_candle_ts = None
+    breakout_candle_close = None
+
+    liquidity_ok = False
+    try:
+        if "Volume" in df.columns and len(df) >= 30:
+            traded_value20 = float((df["Close"] * df["Volume"]).rolling(window=20).mean().iloc[-1])
+            if traded_value20 >= 1_000_000:
+                liquidity_ok = True
+                score += 1
+    except Exception:
+        pass
+
+    try:
+        lookback_days = int(signal_lookback) if signal_lookback is not None else 5
+    except Exception:
+        lookback_days = 5
+    if lookback_days < 1:
+        lookback_days = 1
+    if lookback_days > 20:
+        lookback_days = 20
+
+    try:
+        if "Volume" in df.columns and len(df) >= (breakout_lookback + 25 + lookback_days):
+            vols = pd.to_numeric(df["Volume"], errors="coerce")
+            avg20 = vols.rolling(window=20).mean()
+
+            start_idx = len(df) - lookback_days
+            for i in range(len(df) - 1, start_idx - 1, -1):
+                close_i = float(df["Close"].iloc[i])
+                open_i = float(df["Open"].iloc[i])
+                high_i = float(df["High"].iloc[i])
+                low_i = float(df["Low"].iloc[i])
+                if not (close_i > 0.0):
+                    continue
+
+                prior_close_high = float(df["Close"].iloc[i - breakout_lookback : i].max())
+                is_breakout_55 = close_i > prior_close_high
+
+                is_power = False
+                try:
+                    if high_i > low_i:
+                        close_pos = (close_i - low_i) / (high_i - low_i)
+                        body_pct = abs(close_i - open_i) / (high_i - low_i)
+                        if close_i > open_i and close_pos >= 0.7 and body_pct >= 0.55:
+                            is_power = True
+                except Exception:
+                    is_power = False
+
+                is_vol_spike = False
+                try:
+                    avg_i = float(avg20.iloc[i])
+                    vol_i = float(vols.iloc[i])
+                    if avg_i > 0 and vol_i >= avg_i * 1.8:
+                        is_vol_spike = True
+                except Exception:
+                    is_vol_spike = False
+
+                if is_breakout_55 and is_power and is_vol_spike:
+                    breakout_candle = True
+                    breakout_55 = True
+                    power_candle = True
+                    volume_spike = True
+                    breakout_candle_ts = df.index[i]
+                    breakout_candle_close = close_i
+                    break
+    except Exception:
+        pass
+
+    runup_pct = None
+    try:
+        if breakout_candle and breakout_candle_close is not None and breakout_candle_close > 0:
+            runup_pct = ((float(current_close) / float(breakout_candle_close)) - 1.0) * 100.0
+    except Exception:
+        runup_pct = None
+
+    max_runup_val = None
+    try:
+        if max_runup_pct is not None and str(max_runup_pct).strip() != "":
+            max_runup_val = float(max_runup_pct)
+    except Exception:
+        max_runup_val = None
+
+    if breakout_candle:
+        if max_runup_val is None or (runup_pct is not None and runup_pct <= max_runup_val):
+            breakout_candle_valid = True
+            score += 1
+    else:
+        try:
+            if len(df) >= breakout_lookback + 5:
+                prior_high = float(df["Close"].iloc[-breakout_lookback:-1].max())
+                if current_close > prior_high:
+                    breakout_55 = True
+                    score += 2
+        except Exception:
+            pass
+
+        try:
+            o = float(df["Open"].iloc[-1])
+            h = float(df["High"].iloc[-1])
+            l = float(df["Low"].iloc[-1])
+            if h > l:
+                close_pos = (current_close - l) / (h - l)
+                if close_pos >= 0.7:
+                    score += 1
+        except Exception:
+            pass
+
+        try:
+            if "Volume" in df.columns and len(df) >= 30:
+                current_vol = float(df["Volume"].iloc[-1])
+                avg_vol20 = float(df["Volume"].rolling(window=20).mean().iloc[-1])
+                if avg_vol20 > 0 and current_vol >= avg_vol20 * 1.8:
+                    score += 1
+        except Exception:
+            pass
+
+    rs_3m = None
+    try:
+        if benchmark_df is not None and not benchmark_df.empty:
+            s = df["Close"].copy()
+            b = benchmark_df["Close"].copy() if "Close" in benchmark_df.columns else None
+            if b is not None:
+                join = pd.concat([s, b], axis=1, join="inner").dropna()
+                if len(join) >= 70:
+                    s_now = float(join.iloc[-1, 0])
+                    s_prev = float(join.iloc[-64, 0])
+                    b_now = float(join.iloc[-1, 1])
+                    b_prev = float(join.iloc[-64, 1])
+                    if s_prev > 0 and b_prev > 0:
+                        rs_3m = (s_now / s_prev) - (b_now / b_prev)
+                        if rs_3m > 0:
+                            score += 1
+    except Exception:
+        pass
+
+    atr_contraction = False
+    try:
+        if len(df) >= 40:
+            prev_close = df["Close"].shift(1)
+            tr = pd.concat(
+                [
+                    (df["High"] - df["Low"]).abs(),
+                    (df["High"] - prev_close).abs(),
+                    (df["Low"] - prev_close).abs(),
+                ],
+                axis=1,
+            ).max(axis=1)
+            atr14 = tr.rolling(window=14).mean()
+            atr_pct = atr14 / df["Close"]
+            recent = float(pd.to_numeric(atr_pct.tail(5), errors="coerce").dropna().mean())
+            prior = float(pd.to_numeric(atr_pct.iloc[-25:-5], errors="coerce").dropna().mean())
+            if prior > 0 and recent > 0 and recent <= prior * 0.8:
+                atr_contraction = True
+                score += 1
+    except Exception:
+        pass
+
+    code, name, sector, analysis, catalyst = _resolve_insight_v3(ticker, resolved_name)
+
+    breakout_candle_date = None
+    breakout_candle_age = None
+    if breakout_candle_ts is not None:
+        try:
+            breakout_candle_date = pd.Timestamp(breakout_candle_ts).date().isoformat()
+            breakout_candle_age = int(len(df) - 1 - df.index.get_loc(breakout_candle_ts))
+        except Exception:
+            breakout_candle_date = None
+            breakout_candle_age = None
+
+    return {
+        "ticker": ticker,
+        "code": code,
+        "name": name,
+        "sector": sector,
+        "price": float(round(float(current_close), 3)),
+        "rsi": float(round(float(rsi), 2)),
+        "score": int(score),
+        "score_max": int(score_max),
+        "analysis": analysis,
+        "catalyst": catalyst,
+        "rs_3m": None if rs_3m is None else float(rs_3m),
+        "atr_contraction": bool(atr_contraction),
+        "breakout_55": bool(breakout_55),
+        "power_candle": bool(power_candle),
+        "volume_spike": bool(volume_spike),
+        "liquidity_ok": bool(liquidity_ok),
+        "breakout_candle": bool(breakout_candle),
+        "breakout_candle_valid": bool(breakout_candle_valid),
+        "breakout_candle_date": breakout_candle_date,
+        "breakout_candle_age": breakout_candle_age,
+        "signal_lookback": int(lookback_days),
+        "breakout_candle_close": None if breakout_candle_close is None else float(breakout_candle_close),
+        "runup_pct": None if runup_pct is None else float(runup_pct),
+        "max_runup_pct": None if max_runup_val is None else float(max_runup_val),
+        "model": "v3",
+    }
+
 # --- KLCI COMPONENTS (Top 30 Stocks) ---
 KLCI_COMPONENTS = [
     "1155.KL", "1295.KL", "1023.KL", "5347.KL", "5183.KL", 
@@ -628,7 +929,7 @@ def get_futures_breakouts():
             results.append(analysis)
     return results
 
-def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=None):
+def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=None, sector_allowlist=None, signal_lookback=5, max_runup_pct=None):
     """
     Scans a stock universe and returns the top N stocks 
     based on their breakout scores.
@@ -645,8 +946,25 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
             benchmark_df = None
     
     tickers = universe if universe is not None else get_stock_universe(universe_mode)[0]
+    allow = None
+    if str(model).lower() == "v3" and sector_allowlist:
+        allow = {str(x).strip().lower() for x in sector_allowlist if str(x).strip()}
     # Using individual fetching for better error handling in this environment
     for ticker in tickers:
+        if allow:
+            t = str(ticker).upper().strip()
+            code = t.split(".")[0]
+            insight = MARKET_INSIGHTS.get(t)
+            if not insight:
+                for _, v in MARKET_INSIGHTS.items():
+                    if v.get("code") == code:
+                        insight = v
+                        break
+            sector = None
+            if insight:
+                sector = insight.get("sector")
+            if sector and str(sector).strip().lower() not in allow:
+                continue
         df, resolved_name = get_stock_data(ticker, period="1y")
         if df is None or df.empty:
             continue
@@ -677,7 +995,10 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
         except Exception:
             continue
 
-        if str(model).lower() == "v2":
+        m = str(model).lower()
+        if m == "v3":
+            analysis = analyze_breakout_v3(ticker, df, resolved_name, benchmark_df=benchmark_df, min_rows=120, signal_lookback=signal_lookback, max_runup_pct=max_runup_pct)
+        elif m == "v2":
             analysis = analyze_breakout_v2(ticker, df, resolved_name, benchmark_df=benchmark_df, min_rows=120)
         else:
             analysis = analyze_breakout(ticker, df, resolved_name)

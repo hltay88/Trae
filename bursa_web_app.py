@@ -3,7 +3,7 @@ import plotly.graph_objects as go
 import pandas as pd
 from urllib.parse import quote
 import streamlit.components.v1 as components
-from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, analyze_breakout_v2, search_bursa, get_top_breakouts, get_stock_universe, BURSA_UNIVERSE_FILE, KLCI_COMPONENTS, get_futures_breakouts
+from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, analyze_breakout_v2, analyze_breakout_v3, search_bursa, get_top_breakouts, get_stock_universe, BURSA_UNIVERSE_FILE, KLCI_COMPONENTS, get_futures_breakouts
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Bursa Breakout Analyzer", layout="wide", page_icon="📈")
@@ -199,6 +199,12 @@ if "breakout_model" not in st.session_state:
     st.session_state.breakout_model = "v2"
 if "universe_mode" not in st.session_state:
     st.session_state.universe_mode = "curated"
+if "sector_focus" not in st.session_state:
+    st.session_state.sector_focus = []
+if "v3_signal_lookback" not in st.session_state:
+    st.session_state.v3_signal_lookback = 5
+if "v3_max_runup_pct" not in st.session_state:
+    st.session_state.v3_max_runup_pct = None
 
 # --- UI ---
 if not chart_symbol:
@@ -234,7 +240,12 @@ if chart_symbol:
 # Initialize session state for watchlist
 if 'watchlist' not in st.session_state:
     with st.spinner("Initializing Market Discovery..."):
-        top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model, universe_mode=st.session_state.universe_mode)
+        top_breakouts = get_top_breakouts(
+            limit=20,
+            model=st.session_state.breakout_model,
+            universe_mode=st.session_state.universe_mode,
+            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+        )
         st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
 
 # Sidebar for adding stocks (hide in popup mode)
@@ -257,7 +268,14 @@ if not popup_mode:
     if selected_universe != st.session_state.universe_mode:
         st.session_state.universe_mode = selected_universe
         with st.spinner("Refreshing list for selected universe..."):
-            top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model, universe_mode=st.session_state.universe_mode)
+            top_breakouts = get_top_breakouts(
+                limit=20,
+                model=st.session_state.breakout_model,
+                universe_mode=st.session_state.universe_mode,
+                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+                signal_lookback=st.session_state.v3_signal_lookback,
+                max_runup_pct=st.session_state.v3_max_runup_pct,
+            )
             st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
         st.rerun()
     if st.session_state.universe_mode == "file":
@@ -265,21 +283,100 @@ if not popup_mode:
 
     model_label = st.sidebar.radio(
         "Breakout Model",
-        ["Stronger (V2)", "Original (V1)"],
-        index=0 if st.session_state.breakout_model == "v2" else 1,
+        ["Breakout Candle (V3)", "Stronger (V2)", "Original (V1)"],
+        index=0 if st.session_state.breakout_model == "v3" else (1 if st.session_state.breakout_model == "v2" else 2),
         horizontal=True,
     )
-    selected_model = "v2" if model_label.startswith("Stronger") else "v1"
+    selected_model = "v3" if model_label.startswith("Breakout") else ("v2" if model_label.startswith("Stronger") else "v1")
     if selected_model != st.session_state.breakout_model:
         st.session_state.breakout_model = selected_model
         with st.spinner("Refreshing list for selected model..."):
-            top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model, universe_mode=st.session_state.universe_mode)
+            top_breakouts = get_top_breakouts(
+                limit=20,
+                model=st.session_state.breakout_model,
+                universe_mode=st.session_state.universe_mode,
+                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+                signal_lookback=st.session_state.v3_signal_lookback,
+                max_runup_pct=st.session_state.v3_max_runup_pct,
+            )
             st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
         st.rerun()
 
+    if st.session_state.breakout_model == "v3":
+        v3_window = st.sidebar.radio(
+            "V3 Breakout Window",
+            [3, 5, 10],
+            index=1 if int(st.session_state.v3_signal_lookback) == 5 else (0 if int(st.session_state.v3_signal_lookback) == 3 else 2),
+            horizontal=True,
+        )
+        v3_window = int(v3_window)
+        if v3_window != int(st.session_state.v3_signal_lookback):
+            st.session_state.v3_signal_lookback = v3_window
+            with st.spinner("Refreshing list for V3 breakout window..."):
+                top_breakouts = get_top_breakouts(
+                    limit=20,
+                    model=st.session_state.breakout_model,
+                    universe_mode=st.session_state.universe_mode,
+                    sector_allowlist=st.session_state.sector_focus or None,
+                    signal_lookback=st.session_state.v3_signal_lookback,
+                    max_runup_pct=st.session_state.v3_max_runup_pct,
+                )
+                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+            st.rerun()
+
+        runup_label = st.sidebar.radio(
+            "V3 Max Run-up",
+            ["Off", "3%", "5%", "8%"],
+            index=0 if st.session_state.v3_max_runup_pct is None else (1 if float(st.session_state.v3_max_runup_pct) == 3.0 else (2 if float(st.session_state.v3_max_runup_pct) == 5.0 else 3)),
+            horizontal=True,
+        )
+        runup_map = {"Off": None, "3%": 3.0, "5%": 5.0, "8%": 8.0}
+        new_runup = runup_map.get(runup_label, None)
+        if new_runup != st.session_state.v3_max_runup_pct:
+            st.session_state.v3_max_runup_pct = new_runup
+            with st.spinner("Refreshing list for V3 max run-up..."):
+                top_breakouts = get_top_breakouts(
+                    limit=20,
+                    model=st.session_state.breakout_model,
+                    universe_mode=st.session_state.universe_mode,
+                    sector_allowlist=st.session_state.sector_focus or None,
+                    signal_lookback=st.session_state.v3_signal_lookback,
+                    max_runup_pct=st.session_state.v3_max_runup_pct,
+                )
+                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+            st.rerun()
+
+    sectors = sorted({str(v.get("sector")).strip() for v in MARKET_INSIGHTS.values() if str(v.get("sector") or "").strip()})
+    if sectors:
+        selected_sectors = st.sidebar.multiselect(
+            "Sector Focus (optional)",
+            options=sectors,
+            default=st.session_state.sector_focus,
+        )
+        if selected_sectors != st.session_state.sector_focus:
+            st.session_state.sector_focus = selected_sectors
+            with st.spinner("Refreshing list for selected sector focus..."):
+                top_breakouts = get_top_breakouts(
+                    limit=20,
+                    model=st.session_state.breakout_model,
+                    universe_mode=st.session_state.universe_mode,
+                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+                    signal_lookback=st.session_state.v3_signal_lookback,
+                    max_runup_pct=st.session_state.v3_max_runup_pct,
+                )
+                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+            st.rerun()
+
     if st.sidebar.button("🔄 Refresh Market Discovery", use_container_width=True):
         with st.spinner("Re-scanning KLCI components..."):
-            top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model, universe_mode=st.session_state.universe_mode)
+            top_breakouts = get_top_breakouts(
+                limit=20,
+                model=st.session_state.breakout_model,
+                universe_mode=st.session_state.universe_mode,
+                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+                signal_lookback=st.session_state.v3_signal_lookback,
+                max_runup_pct=st.session_state.v3_max_runup_pct,
+            )
             st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
             st.success("Dashboard updated!")
             st.rerun()
@@ -300,7 +397,15 @@ if not popup_mode:
             st.error("Could not find stock. Try using the exact code (e.g., 5347).")
 
     if st.sidebar.button("🗑️ Reset to Top 20", use_container_width=True):
-        top_breakouts = get_top_breakouts(limit=20, model=st.session_state.breakout_model, universe_mode=st.session_state.universe_mode)
+        top_breakouts = get_top_breakouts(
+            limit=20,
+            model=st.session_state.breakout_model,
+            universe_mode=st.session_state.universe_mode,
+            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+            signal_lookback=st.session_state.v3_signal_lookback,
+            max_runup_pct=st.session_state.v3_max_runup_pct,
+        )
+        st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
         st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
         st.rerun()
 
@@ -311,7 +416,7 @@ with tab_stocks:
     data_rows = []
     breakout_model = st.session_state.get("breakout_model", "v2")
     benchmark_df = None
-    if breakout_model == "v2":
+    if breakout_model in {"v2", "v3"}:
         try:
             benchmark_df, _ = get_stock_data("^KLSE", period="1y")
         except Exception:
@@ -324,7 +429,16 @@ with tab_stocks:
             if "=F" in t: continue
             df, name = get_stock_data(t, period="1y")
             if df is not None and not df.empty:
-                if breakout_model == "v2":
+                if breakout_model == "v3":
+                    analysis = analyze_breakout_v3(
+                        t,
+                        df,
+                        name,
+                        benchmark_df=benchmark_df,
+                        signal_lookback=st.session_state.v3_signal_lookback,
+                        max_runup_pct=st.session_state.v3_max_runup_pct,
+                    ) or analyze_breakout_v2(t, df, name, benchmark_df=benchmark_df) or analyze_breakout(t, df, name)
+                elif breakout_model == "v2":
                     analysis = analyze_breakout_v2(t, df, name, benchmark_df=benchmark_df) or analyze_breakout(t, df, name)
                 else:
                     analysis = analyze_breakout(t, df, name)
@@ -333,8 +447,15 @@ with tab_stocks:
 
     if data_rows:
         # Top Metrics
-        strong_threshold = 7 if breakout_model == "v2" else 4
-        neutral_threshold = 4 if breakout_model == "v2" else 2
+        if breakout_model == "v3":
+            strong_threshold = 8
+            neutral_threshold = 5
+        elif breakout_model == "v2":
+            strong_threshold = 7
+            neutral_threshold = 4
+        else:
+            strong_threshold = 4
+            neutral_threshold = 2
         total_breakouts = len([r for r in data_rows if int(r.get('score', 0)) >= strong_threshold])
         avg_rsi = sum([r['rsi'] for r in data_rows]) / len(data_rows)
         
@@ -355,9 +476,13 @@ with tab_stocks:
             display_rows.append({
                 "Ticker": r['ticker'],
                 "Name": linked_name,
+                "Sector": r.get("sector", ""),
                 "Last Price (RM)": f"{float(r['price']):.2f}",
                 "Score": f"{score_val}/{score_max}",
                 "RSI": r['rsi'],
+                "Signal": "⚡ BREAKOUT" if r.get("breakout_candle_valid") else ("⏰ LATE" if r.get("breakout_candle") else ("📈 Breakout" if r.get("breakout_55") else "")),
+                "Signal Date": r.get("breakout_candle_date", ""),
+                "Run-up %": "" if r.get("runup_pct") is None else f"{float(r.get('runup_pct')):.1f}%",
                 "Status": "🔥 STRONG" if score_val >= strong_threshold else ("⚖️ NEUTRAL" if score_val >= neutral_threshold else "❄️ WEAK"),
                 "Catalyst / Insight": r['catalyst'] if score_val >= neutral_threshold else r['analysis']
             })
@@ -411,7 +536,11 @@ if not popup_mode:
 # --- TECHNICAL EXPLANATION ---
 with st.expander("ℹ️ How is the Breakout Score calculated?"):
     st.markdown("""
-    You can switch between **Stronger (V2)** and **Original (V1)** using the sidebar toggle.
+    You can switch between **Breakout Candle (V3)**, **Stronger (V2)** and **Original (V1)** using the sidebar toggle.
+    
+    **Breakout Candle (V3) — Score 0-11** keeps the V2 foundation, and adds a bonus when the latest bar is a breakout candle:
+    
+    - **Breakout candle** = 55-day breakout + bullish power candle + volume spike
     
     **Stronger (V2) — Score 0-10** emphasizes:
     
