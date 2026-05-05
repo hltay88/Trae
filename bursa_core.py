@@ -1251,19 +1251,52 @@ def search_bursa(query):
     """
     Searches for a Bursa Malaysia stock code or symbol.
     """
-    query_upper = query.upper().strip()
+    query_upper = str(query or "").upper().strip()
+    if not query_upper:
+        return None
     
     # Precise mapping for futures
     if query_upper == "FKLI": return "FKLI=F"
     if query_upper == "FCPO": return "FCPO=F"
     if query_upper == "FM70": return "FM70=F"
     
-    if query.isdigit() and len(query) == 4:
-        return f"{query}.KL"
+    if query_upper in MARKET_INSIGHTS:
+        return query_upper
+
+    if query_upper.endswith(".KL") and len(query_upper.split(".")[0]) == 4 and query_upper.split(".")[0].isdigit():
+        return query_upper
+
+    if query_upper in {"^KLSE", "^KLSI"}:
+        return "^KLSE"
+
+    if query_upper.isdigit() and len(query_upper) == 4:
+        return f"{query_upper}.KL"
+
     try:
-        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=5"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers).json()
+        for k, v in MARKET_INSIGHTS.items():
+            code = str(v.get("code") or "").strip().upper()
+            name = str(v.get("name") or "").strip().upper()
+            if query_upper == name or query_upper == code:
+                return str(k).upper().strip()
+    except Exception:
+        pass
+
+    try:
+        name_map = _load_auto_universe_name_map()
+        if name_map:
+            for t, n in name_map.items():
+                if query_upper == str(n).strip().upper():
+                    return str(t).upper().strip()
+            for t, n in name_map.items():
+                if query_upper in str(n).strip().upper():
+                    return str(t).upper().strip()
+    except Exception:
+        pass
+
+    try:
+        url = "https://query2.finance.yahoo.com/v1/finance/search"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, params={"q": query_upper, "quotesCount": 10}, timeout=15).json()
         for quote in response.get('quotes', []):
             if quote.get('symbol', '').endswith('.KL'):
                 return quote['symbol']
