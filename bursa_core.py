@@ -537,7 +537,7 @@ def analyze_breakout_v2(ticker, df, resolved_name=None, benchmark_df=None, min_r
     }
 
 
-def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_rows=120, signal_lookback=5, max_runup_pct=None):
+def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_rows=120, signal_lookback=5, max_runup_pct=None, max_pullback_pct=None, retest_days=0):
     if df is None or len(df) < min_rows:
         return None
 
@@ -577,8 +577,10 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
         pass
 
     sma50 = sma200 = None
+    sma50_series = None
     try:
-        sma50 = float(SMAIndicator(df["Close"], window=50).sma_indicator().iloc[-1])
+        sma50_series = SMAIndicator(df["Close"], window=50).sma_indicator()
+        sma50 = float(sma50_series.iloc[-1])
         if len(df) >= 220:
             sma200 = float(SMAIndicator(df["Close"], window=200).sma_indicator().iloc[-1])
     except Exception:
@@ -607,16 +609,18 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
 
     breakout_candle = False
     breakout_candle_valid = False
+    breakout_hold_ok = False
     breakout_55 = False
     power_candle = False
     volume_spike = False
     breakout_candle_ts = None
     breakout_candle_close = None
+    breakout_candle_vol = None
 
     liquidity_ok = False
     try:
         if "Volume" in df.columns and len(df) >= 30:
-            traded_value20 = float((df["Close"] * df["Volume"]).rolling(window=20).mean().iloc[-1])
+            traded_value20 = float((df["Close"] * df["Volume"]).rolling(window=20).mean().shift(1).iloc[-1])
             if traded_value20 >= 1_000_000:
                 liquidity_ok = True
                 score += 1
@@ -633,12 +637,14 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
         lookback_days = 20
 
     try:
-        if "Volume" in df.columns and len(df) >= (breakout_lookback + 25 + lookback_days):
+        if "Volume" in df.columns and len(df) >= (breakout_lookback + lookback_days + 1):
             vols = pd.to_numeric(df["Volume"], errors="coerce")
-            avg20 = vols.rolling(window=20).mean()
+            avg20_prev = vols.rolling(window=20).mean().shift(1)
 
             start_idx = len(df) - lookback_days
             for i in range(len(df) - 1, start_idx - 1, -1):
+                if i < breakout_lookback or i < 20:
+                    continue
                 close_i = float(df["Close"].iloc[i])
                 open_i = float(df["Open"].iloc[i])
                 high_i = float(df["High"].iloc[i])
@@ -648,6 +654,16 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
 
                 prior_close_high = float(df["Close"].iloc[i - breakout_lookback : i].max())
                 is_breakout_55 = close_i > prior_close_high
+                if not is_breakout_55:
+                    continue
+
+                if sma50_series is not None:
+                    try:
+                        sma50_i = float(sma50_series.iloc[i])
+                        if sma50_i == sma50_i and not (close_i > sma50_i):
+                            continue
+                    except Exception:
+                        pass
 
                 is_power = False
                 try:
@@ -658,24 +674,31 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
                             is_power = True
                 except Exception:
                     is_power = False
+                if not is_power:
+                    continue
 
                 is_vol_spike = False
                 try:
-                    avg_i = float(avg20.iloc[i])
+                    avg_i = float(avg20_prev.iloc[i])
                     vol_i = float(vols.iloc[i])
                     if avg_i > 0 and vol_i >= avg_i * 1.8:
                         is_vol_spike = True
                 except Exception:
                     is_vol_spike = False
+                if not is_vol_spike:
+                    continue
 
-                if is_breakout_55 and is_power and is_vol_spike:
-                    breakout_candle = True
-                    breakout_55 = True
-                    power_candle = True
-                    volume_spike = True
-                    breakout_candle_ts = df.index[i]
-                    breakout_candle_close = close_i
-                    break
+                breakout_candle = True
+                breakout_55 = True
+                power_candle = True
+                volume_spike = True
+                breakout_candle_ts = df.index[i]
+                breakout_candle_close = close_i
+                try:
+                    breakout_candle_vol = float(vols.iloc[i])
+                except Exception:
+                    breakout_candle_vol = None
+                break
     except Exception:
         pass
 
@@ -693,8 +716,19 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
     except Exception:
         max_runup_val = None
 
+    max_pullback_val = None
+    try:
+        if max_pullback_pct is not None and str(max_pullback_pct).strip() != "":
+            max_pullback_val = float(max_pullback_pct)
+    except Exception:
+        max_pullback_val = None
+
     if breakout_candle:
-        if max_runup_val is None or (runup_pct is not None and runup_pct <= max_runup_val):
+        if max_pullback_val is None or (runup_pct is not None and runup_pct >= -max_pullback_val):
+            breakout_hold_ok = True
+
+    if breakout_candle:
+        if breakout_hold_ok and (max_runup_val is None or (runup_pct is not None and runup_pct <= max_runup_val)):
             breakout_candle_valid = True
             score += 1
     else:
@@ -721,7 +755,7 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
         try:
             if "Volume" in df.columns and len(df) >= 30:
                 current_vol = float(df["Volume"].iloc[-1])
-                avg_vol20 = float(df["Volume"].rolling(window=20).mean().iloc[-1])
+                avg_vol20 = float(df["Volume"].rolling(window=20).mean().shift(1).iloc[-1])
                 if avg_vol20 > 0 and current_vol >= avg_vol20 * 1.8:
                     score += 1
         except Exception:
@@ -780,6 +814,51 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
             breakout_candle_date = None
             breakout_candle_age = None
 
+    retest_days_i = 0
+    try:
+        retest_days_i = int(retest_days) if retest_days is not None else 0
+    except Exception:
+        retest_days_i = 0
+    if retest_days_i < 0:
+        retest_days_i = 0
+    if retest_days_i > 20:
+        retest_days_i = 20
+
+    retest_confirmed = False
+    retest_touch_ts = None
+    retest_vol_ok = None
+    if breakout_candle and breakout_candle_ts is not None and breakout_candle_close is not None and retest_days_i > 0:
+        try:
+            i0 = int(df.index.get_loc(breakout_candle_ts))
+            i1 = min(len(df) - 1, i0 + retest_days_i)
+            if i1 >= i0 + 1:
+                level = float(breakout_candle_close)
+                hold_pct = 0.0 if max_pullback_val is None else float(max_pullback_val)
+                hold_floor = level * (1.0 - (hold_pct / 100.0))
+                touch_ceiling = level * 1.01
+                for j in range(i0 + 1, i1 + 1):
+                    low_j = float(df["Low"].iloc[j])
+                    close_j = float(df["Close"].iloc[j])
+                    if low_j <= touch_ceiling and close_j >= hold_floor:
+                        retest_touch_ts = df.index[j]
+                        if breakout_candle_vol is not None:
+                            try:
+                                vj = float(df["Volume"].iloc[j])
+                                retest_vol_ok = bool(vj <= breakout_candle_vol * 0.9)
+                            except Exception:
+                                retest_vol_ok = None
+                        retest_confirmed = True if (retest_vol_ok is None or retest_vol_ok) else False
+                        break
+        except Exception:
+            retest_confirmed = False
+
+    retest_touch_date = None
+    if retest_touch_ts is not None:
+        try:
+            retest_touch_date = pd.Timestamp(retest_touch_ts).date().isoformat()
+        except Exception:
+            retest_touch_date = None
+
     return {
         "ticker": ticker,
         "code": code,
@@ -799,12 +878,19 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
         "liquidity_ok": bool(liquidity_ok),
         "breakout_candle": bool(breakout_candle),
         "breakout_candle_valid": bool(breakout_candle_valid),
+        "breakout_hold_ok": bool(breakout_hold_ok),
         "breakout_candle_date": breakout_candle_date,
         "breakout_candle_age": breakout_candle_age,
         "signal_lookback": int(lookback_days),
         "breakout_candle_close": None if breakout_candle_close is None else float(breakout_candle_close),
+        "breakout_candle_vol": None if breakout_candle_vol is None else float(breakout_candle_vol),
         "runup_pct": None if runup_pct is None else float(runup_pct),
         "max_runup_pct": None if max_runup_val is None else float(max_runup_val),
+        "max_pullback_pct": None if max_pullback_val is None else float(max_pullback_val),
+        "retest_days": int(retest_days_i),
+        "retest_confirmed": bool(retest_confirmed),
+        "retest_touch_date": retest_touch_date,
+        "retest_vol_ok": None if retest_vol_ok is None else bool(retest_vol_ok),
         "model": "v3",
     }
 
@@ -830,6 +916,75 @@ STOCK_DISCOVERY_UNIVERSE = sorted(
 )
 
 BURSA_UNIVERSE_FILE = os.path.join(os.path.dirname(__file__), "bursa_universe.csv")
+BURSA_UNIVERSE_AUTO_FILE = os.path.join(os.path.dirname(__file__), "bursa_universe_auto.csv")
+
+
+def _read_universe_codes(raw_codes):
+    out = []
+    for x in raw_codes or []:
+        s = str(x).strip().upper()
+        if not s:
+            continue
+        s = s.replace(" ", "")
+        base = s
+        if base.endswith(".KL"):
+            base = base[:-3]
+
+        if base.startswith("^") or base.endswith("=F"):
+            continue
+        if "REIT" in base or "ETF" in base:
+            continue
+        if base.endswith("EA"):
+            continue
+        if base.endswith(("WA", "WB", "WC", "WD", "WE", "WF", "WG")) or "-W" in base:
+            continue
+
+        if base.isdigit() and len(base) == 4:
+            out.append(f"{base}.KL")
+    return sorted(set(out))
+
+
+def _fetch_universe_from_github():
+    url = "https://raw.githubusercontent.com/KennethChua1998/BursaMalaysiaWebScrapper/master/stock_list.csv"
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=25)
+        r.raise_for_status()
+        lines = r.text.splitlines()
+        if not lines:
+            return []
+        raw = []
+        for line in lines[1:]:
+            parts = [p.strip() for p in line.split(",")]
+            if not parts:
+                continue
+            raw.append(parts[0])
+        return _read_universe_codes(raw)
+    except Exception:
+        return []
+
+
+def _load_or_refresh_auto_universe(max_age_days: int = 14):
+    try:
+        if os.path.exists(BURSA_UNIVERSE_AUTO_FILE):
+            try:
+                age_s = (pd.Timestamp.now() - pd.Timestamp.fromtimestamp(os.path.getmtime(BURSA_UNIVERSE_AUTO_FILE))).total_seconds()
+                if age_s < float(max_age_days) * 86400.0:
+                    return _load_universe_from_file(BURSA_UNIVERSE_AUTO_FILE)
+            except Exception:
+                pass
+
+        u = _fetch_universe_from_github()
+        if u:
+            try:
+                with open(BURSA_UNIVERSE_AUTO_FILE, "w", encoding="utf-8") as f:
+                    for t in u:
+                        f.write(f"{t}\n")
+            except Exception:
+                pass
+            return u
+        return _load_universe_from_file(BURSA_UNIVERSE_FILE)
+    except Exception:
+        return []
 
 def _load_universe_from_file(path: str):
     try:
@@ -845,37 +1000,24 @@ def _load_universe_from_file(path: str):
         except Exception:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 raw = [line.strip() for line in f.readlines()]
-        out = []
+        cleaned = []
         for x in raw:
             s = str(x).strip().upper()
             if not s:
                 continue
             if s in {"TICKER", "SYMBOL", "CODE"}:
                 continue
-            s = s.replace(" ", "")
-
-            base = s
-            if base.endswith(".KL"):
-                base = base[:-3]
-
-            if base.startswith("^") or base.endswith("=F"):
-                continue
-
-            if "REIT" in base or "ETF" in base:
-                continue
-            if base.endswith("EA"):
-                continue
-            if base.endswith(("WA", "WB", "WC", "WD", "WE", "WF", "WG")) or "-W" in base:
-                continue
-
-            if base.isdigit() and len(base) == 4:
-                out.append(f"{base}.KL")
-        return sorted(set(out))
+            cleaned.append(s)
+        return _read_universe_codes(cleaned)
     except Exception:
         return []
 
 def get_stock_universe(mode: str = "curated"):
     m = str(mode or "").lower().strip()
+    if m in {"auto", "malaysia", "my"}:
+        u = _load_or_refresh_auto_universe()
+        if u:
+            return u, "auto"
     if m in {"file", "full", "all"}:
         u = _load_universe_from_file(BURSA_UNIVERSE_FILE)
         if u:
@@ -929,7 +1071,7 @@ def get_futures_breakouts():
             results.append(analysis)
     return results
 
-def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=None, sector_allowlist=None, signal_lookback=5, max_runup_pct=None):
+def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=None, sector_allowlist=None, signal_lookback=5, max_runup_pct=None, max_pullback_pct=None, retest_days=0, max_tickers=None):
     """
     Scans a stock universe and returns the top N stocks 
     based on their breakout scores.
@@ -946,6 +1088,13 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
             benchmark_df = None
     
     tickers = universe if universe is not None else get_stock_universe(universe_mode)[0]
+    try:
+        if max_tickers is not None:
+            n = int(max_tickers)
+            if n > 0:
+                tickers = tickers[:n]
+    except Exception:
+        pass
     allow = None
     if str(model).lower() == "v3" and sector_allowlist:
         allow = {str(x).strip().lower() for x in sector_allowlist if str(x).strip()}
@@ -997,7 +1146,7 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
 
         m = str(model).lower()
         if m == "v3":
-            analysis = analyze_breakout_v3(ticker, df, resolved_name, benchmark_df=benchmark_df, min_rows=120, signal_lookback=signal_lookback, max_runup_pct=max_runup_pct)
+            analysis = analyze_breakout_v3(ticker, df, resolved_name, benchmark_df=benchmark_df, min_rows=120, signal_lookback=signal_lookback, max_runup_pct=max_runup_pct, max_pullback_pct=max_pullback_pct, retest_days=retest_days)
         elif m == "v2":
             analysis = analyze_breakout_v2(ticker, df, resolved_name, benchmark_df=benchmark_df, min_rows=120)
         else:
@@ -1005,8 +1154,18 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
         if analysis:
             all_results.append(analysis)
     
-    # Sort by score descending, then by RSI (lower RSI preferred if scores equal)
-    all_results.sort(key=lambda x: (x['score'], -x['rsi']), reverse=True)
+    if str(model).lower() == "v3":
+        all_results.sort(
+            key=lambda x: (
+                bool(x.get("retest_confirmed")),
+                bool(x.get("breakout_candle_valid")),
+                int(x.get("score", 0)),
+                -float(x.get("rsi", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
+    else:
+        all_results.sort(key=lambda x: (x['score'], -x['rsi']), reverse=True)
     
     return all_results[:limit]
 
