@@ -3,6 +3,8 @@ import pandas as pd
 import datetime
 import requests
 import re
+import csv
+import csv
 
 cache_path = os.path.join(os.getcwd(), ".yfinance_cache")
 if os.environ.get("STREAMLIT_SERVER_PORT") or not os.access(os.getcwd(), os.W_OK):
@@ -236,6 +238,13 @@ def get_stock_data(ticker, period="1y"):
 
                 name = base_name
                 # Only try yfinance info if we don't have a good name yet
+                if name == ticker or ".KL" in str(name):
+                    try:
+                        auto_name = _auto_universe_name(symbol) or _auto_universe_name(ticker)
+                        if auto_name:
+                            name = auto_name
+                    except Exception:
+                        pass
                 if name == ticker or ".KL" in str(name):
                     try:
                         yf_info = stock.info
@@ -918,6 +927,8 @@ STOCK_DISCOVERY_UNIVERSE = sorted(
 BURSA_UNIVERSE_FILE = os.path.join(os.path.dirname(__file__), "bursa_universe.csv")
 BURSA_UNIVERSE_AUTO_FILE = os.path.join(os.path.dirname(__file__), "bursa_universe_auto.csv")
 
+_AUTO_UNIVERSE_NAME_CACHE = {"mtime": None, "map": {}}
+
 
 def _read_universe_codes(raw_codes):
     out = []
@@ -944,23 +955,77 @@ def _read_universe_codes(raw_codes):
     return sorted(set(out))
 
 
+def _load_auto_universe_name_map():
+    try:
+        if not os.path.exists(BURSA_UNIVERSE_AUTO_FILE):
+            return {}
+        mtime = os.path.getmtime(BURSA_UNIVERSE_AUTO_FILE)
+        if _AUTO_UNIVERSE_NAME_CACHE.get("mtime") == mtime and _AUTO_UNIVERSE_NAME_CACHE.get("map"):
+            return _AUTO_UNIVERSE_NAME_CACHE["map"]
+
+        try:
+            df = pd.read_csv(BURSA_UNIVERSE_AUTO_FILE, dtype=str)
+            cols = {str(c).strip().lower(): c for c in df.columns}
+            code_col = cols.get("ticker") or cols.get("symbol") or cols.get("code")
+            name_col = cols.get("name")
+            if not code_col or not name_col:
+                _AUTO_UNIVERSE_NAME_CACHE["mtime"] = mtime
+                _AUTO_UNIVERSE_NAME_CACHE["map"] = {}
+                return {}
+            out = {}
+            for _, row in df[[code_col, name_col]].iterrows():
+                code = str(row[code_col]).strip().upper()
+                name = str(row[name_col]).strip()
+                if not code or not name:
+                    continue
+                if code.isdigit() and len(code) == 4:
+                    out[f"{code}.KL"] = name
+                elif code.endswith(".KL"):
+                    out[code] = name
+            _AUTO_UNIVERSE_NAME_CACHE["mtime"] = mtime
+            _AUTO_UNIVERSE_NAME_CACHE["map"] = out
+            return out
+        except Exception:
+            _AUTO_UNIVERSE_NAME_CACHE["mtime"] = mtime
+            _AUTO_UNIVERSE_NAME_CACHE["map"] = {}
+            return {}
+    except Exception:
+        return {}
+
+
+def _auto_universe_name(ticker: str):
+    try:
+        t = str(ticker).upper().strip()
+        if not t:
+            return None
+        return _load_auto_universe_name_map().get(t)
+    except Exception:
+        return None
+
+
 def _fetch_universe_from_github():
     url = "https://raw.githubusercontent.com/KennethChua1998/BursaMalaysiaWebScrapper/master/stock_list.csv"
     try:
         r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=25)
         r.raise_for_status()
-        lines = r.text.splitlines()
-        if not lines:
-            return []
-        raw = []
-        for line in lines[1:]:
-            parts = [p.strip() for p in line.split(",")]
-            if not parts:
+        text = r.text
+        if not text:
+            return [], {}
+        reader = csv.DictReader(text.splitlines())
+        raw_codes = []
+        name_map = {}
+        for row in reader:
+            code = str(row.get("code") or "").strip()
+            name = str(row.get("name") or "").strip()
+            if not code:
                 continue
-            raw.append(parts[0])
-        return _read_universe_codes(raw)
+            raw_codes.append(code)
+            if name and code.isdigit() and len(code) == 4:
+                name_map[f"{code}.KL"] = name
+        tickers = _read_universe_codes(raw_codes)
+        return tickers, name_map
     except Exception:
-        return []
+        return [], {}
 
 
 def _load_or_refresh_auto_universe(max_age_days: int = 14):
@@ -969,16 +1034,29 @@ def _load_or_refresh_auto_universe(max_age_days: int = 14):
             try:
                 age_s = (pd.Timestamp.now() - pd.Timestamp.fromtimestamp(os.path.getmtime(BURSA_UNIVERSE_AUTO_FILE))).total_seconds()
                 if age_s < float(max_age_days) * 86400.0:
-                    return _load_universe_from_file(BURSA_UNIVERSE_AUTO_FILE)
+                    try:
+                        with open(BURSA_UNIVERSE_AUTO_FILE, "r", encoding="utf-8", errors="ignore") as f:
+                            header = str(f.readline() or "").strip().lower()
+                        if "name" in header and ("code" in header or "ticker" in header or "symbol" in header):
+                            return _load_universe_from_file(BURSA_UNIVERSE_AUTO_FILE)
+                    except Exception:
+                        return _load_universe_from_file(BURSA_UNIVERSE_AUTO_FILE)
             except Exception:
                 pass
 
-        u = _fetch_universe_from_github()
+        u, name_map = _fetch_universe_from_github()
         if u:
             try:
-                with open(BURSA_UNIVERSE_AUTO_FILE, "w", encoding="utf-8") as f:
+                with open(BURSA_UNIVERSE_AUTO_FILE, "w", encoding="utf-8", newline="") as f:
+                    w = csv.writer(f)
+                    w.writerow(["code", "name"])
                     for t in u:
-                        f.write(f"{t}\n")
+                        w.writerow([t.replace(".KL", ""), name_map.get(t) or ""])
+            except Exception:
+                pass
+            try:
+                _AUTO_UNIVERSE_NAME_CACHE["mtime"] = os.path.getmtime(BURSA_UNIVERSE_AUTO_FILE)
+                _AUTO_UNIVERSE_NAME_CACHE["map"] = name_map
             except Exception:
                 pass
             return u
