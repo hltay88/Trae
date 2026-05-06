@@ -1191,6 +1191,25 @@ def _find_tickers_by_name_keywords(keywords: list[str], max_hits: int = 80) -> l
         if not kw:
             return []
 
+        kw_items = []
+        for k in kw:
+            toks = _name_tokens(k)
+            kw_items.append((k, toks))
+
+        def _match(name: str) -> bool:
+            name_u = str(name or "").upper()
+            name_toks = _name_tokens(name_u)
+            for raw, toks in kw_items:
+                if len(raw) <= 3:
+                    if raw in name_toks:
+                        return True
+                    continue
+                if toks and toks.issubset(name_toks):
+                    return True
+                if raw and raw in name_u:
+                    return True
+            return False
+
         name_map = {}
         try:
             name_map = _load_auto_universe_name_map()
@@ -1199,16 +1218,14 @@ def _find_tickers_by_name_keywords(keywords: list[str], max_hits: int = 80) -> l
 
         if name_map:
             for t, n in name_map.items():
-                name_u = str(n).upper()
-                if any(k in name_u for k in kw):
+                if _match(n):
                     out.append(str(t).upper())
                     if len(out) >= max_hits:
                         break
 
         if len(out) < max_hits:
             for t, v in MARKET_INSIGHTS.items():
-                name_u = str(v.get("name") or "").upper()
-                if any(k in name_u for k in kw):
+                if _match(v.get("name") or ""):
                     out.append(str(t).upper())
                     if len(out) >= max_hits:
                         break
@@ -1219,17 +1236,55 @@ def _find_tickers_by_name_keywords(keywords: list[str], max_hits: int = 80) -> l
         return sorted({_normalize_kl_ticker(x) for x in out if _normalize_kl_ticker(x)})
 
 
+def _large_cap_membership_set(max_age_days: int = 30) -> set[str]:
+    s = set()
+    try:
+        s |= set(refresh_klci_components(force=False, max_age_days=max_age_days)[0] or [])
+    except Exception:
+        s |= set(list(KLCI_COMPONENTS))
+    try:
+        s |= set(refresh_index_components("fbm100", force=False, max_age_days=max_age_days)[0] or [])
+    except Exception:
+        pass
+    try:
+        s |= set(refresh_index_components("fbm70", force=False, max_age_days=max_age_days)[0] or [])
+    except Exception:
+        pass
+    return {str(x).upper().strip() for x in s if x}
+
+
+def _prefer_large_caps(tickers: list[str], min_keep: int = 8) -> list[str]:
+    u = [str(x).upper().strip() for x in (tickers or []) if _normalize_kl_ticker(x)]
+    u = [x for x in u if x]
+    large = _large_cap_membership_set(max_age_days=30)
+    if not large:
+        return sorted(set(u))
+    large_hits = [t for t in u if t in large]
+    if len(large_hits) >= int(min_keep):
+        return sorted(set(large_hits))
+    rest = [t for t in u if t not in large]
+    return sorted(set(large_hits + rest))
+
+
 def get_sector_large_cap_universe(mode: str) -> tuple[list[str], str]:
     m = str(mode or "").lower().strip()
     presets = {
-        "sector-tech": ["INARI", "VITROX", "MPI", "UNISEM", "GREATECH", "D&O", "D&O", "D&O GREEN", "FRONTKN"],
-        "sector-utilities": ["YTL", "YTLPOWER", "TENAGA", "IJM", "GAMUDA", "DIALOG", "MALAKOFF", "PETGAS", "PETDAG"],
-        "sector-property": ["IGBREIT", "PAVREIT", "SUNWAY", "IOIPROPG", "SIMEPROP", "UEMSUNRISE"],
-        "sector-consumer": ["HEINEKEN", "CARLSBERG", "NESTLE", "QL", "MRDIY", "PPB"],
+        "sector-tech": ["INARI", "VITROX", "MPI", "UNISEM", "GREATECH", "D&O", "DNEX", "FRONTKEN", "UWC", "MI TECH", "KOBAY"],
+        "sector-utilities": ["YTL", "YTL POWER", "TENAGA", "MALAKOFF", "RANHILL", "GAS MALAYSIA"],
+        "sector-infra": ["IJM", "GAMUDA", "DIALOG", "MISC", "WESTPORTS"],
+        "sector-property": ["IGB REIT", "PAVILION REIT", "SUNWAY", "SUNWAY REIT", "IOI PROPERTIES", "SIME DARBY PROPERTY", "UEM SUNRISE", "SP SETIA"],
+        "sector-consumer": ["HEINEKEN", "CARLSBERG", "NESTLE", "QL", "MR DIY", "PPB", "FRASER"],
+        "sector-banks": ["MAYBANK", "MALAYAN BANKING", "CIMB", "PUBLIC BANK", "RHB", "HONG LEONG BANK", "AMMB", "AFFIN", "BANK ISLAM"],
+        "sector-healthcare": ["IHH", "KPJ", "PHARMANIAGA", "DUOPHARMA", "HARTALEGA", "TOP GLOVE", "KOSSAN", "SUPERMAX"],
+        "sector-energy": ["PETDAG", "PETRONAS DAGANGAN", "PETGAS", "PETRONAS GAS", "PCHEM", "PETRONAS CHEMICALS", "ARMADA", "DAYANG", "HIBISCUS"],
+        "sector-plantation": ["SIME DARBY PLANTATION", "FGV", "IOI CORP", "KLK", "GENTING PLANTATION", "UNITED PLANTATIONS", "TA ANN"],
+        "sector-telco": ["TELEKOM MALAYSIA", "MAXIS", "CELCOMDIGI", "TIME DOTCOM", "ASTRO"],
+        "sector-industrial": ["PRESS METAL", "SCIENTEX", "SAM ENGINEERING", "MALAYAN CEMENT", "LCTITAN"],
     }
     if m not in presets:
         return [], "unknown"
-    u = _find_tickers_by_name_keywords(presets[m], max_hits=120)
+    u = _find_tickers_by_name_keywords(presets[m], max_hits=200)
+    u = _prefer_large_caps(u, min_keep=6)
     return u, m
 
 
