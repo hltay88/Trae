@@ -269,7 +269,11 @@ if 'watchlist' not in st.session_state:
             retest_days=st.session_state.v3_retest_days,
             max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
         )
-        st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+        if top_breakouts:
+            st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+        else:
+            fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
+            st.session_state.watchlist = list(fallback_universe[:20])
 
 # Sidebar for adding stocks (hide in popup mode)
 if not popup_mode:
@@ -318,7 +322,10 @@ if not popup_mode:
                 retest_days=st.session_state.v3_retest_days,
                 max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
             )
-            st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+            if top_breakouts:
+                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+            else:
+                st.session_state.watchlist = list(universe_list[:20])
         st.rerun()
 
     if st.session_state.universe_mode in {"klci", "fbm70", "fbm100", "smallcap"}:
@@ -387,7 +394,11 @@ if not popup_mode:
                     retest_days=st.session_state.v3_retest_days,
                     max_tickers=st.session_state.max_tickers_scan,
                 )
-                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                if top_breakouts:
+                    st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                else:
+                    fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
+                    st.session_state.watchlist = list(fallback_universe[:20])
             st.rerun()
     if st.session_state.universe_mode == "file":
         st.sidebar.caption("Universe source: bursa_universe.csv in the app folder. Put one 4-digit stock code per line (Main + ACE). Example: 6742 or 6742.KL.")
@@ -413,7 +424,11 @@ if not popup_mode:
                 retest_days=st.session_state.v3_retest_days,
                 max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
             )
-            st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+            if top_breakouts:
+                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+            else:
+                fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
+                st.session_state.watchlist = list(fallback_universe[:20])
         st.rerun()
 
 
@@ -659,7 +674,11 @@ if not popup_mode:
                 retest_days=st.session_state.v3_retest_days,
                 max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
             )
-            st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+            if top_breakouts:
+                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+            else:
+                fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
+                st.session_state.watchlist = list(fallback_universe[:20])
             st.success("Dashboard updated!")
             st.rerun()
 
@@ -698,6 +717,8 @@ tab_stocks, tab_futures = st.tabs(["📊 Stock Breakouts", "⛓️ Futures Monit
 
 with tab_stocks:
     data_rows = []
+    fetch_attempted = 0
+    fetch_success = 0
     breakout_model = st.session_state.get("breakout_model", "v2")
     benchmark_df = None
     if breakout_model in {"v2", "v3"}:
@@ -711,8 +732,10 @@ with tab_stocks:
         for t in st.session_state.watchlist:
             # Skip futures in the stock tab if they were added manually
             if "=F" in t: continue
+            fetch_attempted += 1
             df, name = get_stock_data(t, period="1y")
             if df is not None and not df.empty:
+                fetch_success += 1
                 if breakout_model == "v3":
                     analysis = analyze_breakout_v3(
                         t,
@@ -799,6 +822,8 @@ with tab_stocks:
         st.markdown(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
     else:
         st.warning("No data found. Please click 'Refresh Market Discovery' or add valid tickers.")
+        st.caption(f"Fetch summary: {fetch_success}/{fetch_attempted} tickers returned data.")
+        st.caption("If this stays 0, Yahoo data may be blocked/rate-limited in your environment. Try again later, reduce scan size, or switch to a smaller universe (KLCI/Top100).")
 
 with tab_futures:
     st.markdown("### ⛓️ Malaysian Futures Dashboard")

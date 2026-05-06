@@ -216,6 +216,67 @@ def get_stock_data(ticker, period="1y"):
                 base_name = v['name']
                 break
     
+    def _fetch_yahoo_chart(sym: str, rng: str, interval: str = "1d"):
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+            params = {
+                "range": rng,
+                "interval": interval,
+                "includePrePost": "false",
+                "events": "div%7Csplit",
+            }
+            r = requests.get(
+                url,
+                params=params,
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept-Language": "en-US,en;q=0.9",
+                },
+                timeout=25,
+            )
+            if r.status_code != 200:
+                return None
+            j = r.json()
+            result = (((j or {}).get("chart") or {}).get("result") or [None])[0]
+            if not result:
+                return None
+            ts = result.get("timestamp") or []
+            ind = ((result.get("indicators") or {}).get("quote") or [None])[0] or {}
+            if not ts or not ind:
+                return None
+            df = pd.DataFrame(
+                {
+                    "Open": ind.get("open"),
+                    "High": ind.get("high"),
+                    "Low": ind.get("low"),
+                    "Close": ind.get("close"),
+                    "Volume": ind.get("volume"),
+                },
+                index=pd.to_datetime(ts, unit="s", utc=True),
+            )
+            df = df.dropna(subset=[c for c in ["Close"] if c in df.columns])
+            if df.empty:
+                return None
+            try:
+                df.index = df.index.tz_convert("Asia/Kuala_Lumpur")
+            except Exception:
+                pass
+            return df
+        except Exception:
+            return None
+
+    period_map = {
+        "1mo": "1mo",
+        "3mo": "3mo",
+        "6mo": "6mo",
+        "1y": "1y",
+        "2y": "2y",
+        "5y": "5y",
+        "10y": "10y",
+        "max": "max",
+    }
+    rng = period_map.get(str(period).lower().strip(), "1y")
+
     for symbol in symbols_to_try:
         try:
             stock = yf.Ticker(symbol)
@@ -254,6 +315,22 @@ def get_stock_data(ticker, period="1y"):
                 return df, name
         except Exception:
             continue
+
+        try:
+            df2 = _fetch_yahoo_chart(symbol, rng, interval="1d")
+            if df2 is None and rng != "1mo":
+                df2 = _fetch_yahoo_chart(symbol, "1mo", interval="1d")
+            if df2 is not None and not df2.empty:
+                name = base_name
+                try:
+                    auto_name = _auto_universe_name(symbol) or _auto_universe_name(ticker)
+                    if auto_name:
+                        name = auto_name
+                except Exception:
+                    pass
+                return df2, name
+        except Exception:
+            pass
     return None, base_name
 
 def _is_today_kl(ts) -> bool:
