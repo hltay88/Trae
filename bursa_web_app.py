@@ -487,8 +487,9 @@ if not popup_mode:
                 st.session_state.v3_retest_days = 0
 
             with st.spinner("Applying entry style..."):
+                scan_limit = 9999 if st.session_state.v3_signal_filter in {"late", "failed"} else 20
                 top_breakouts = get_top_breakouts(
-                    limit=20,
+                    limit=scan_limit,
                     model=st.session_state.breakout_model,
                     universe_mode=st.session_state.universe_mode,
                     sector_allowlist=st.session_state.sector_focus or None,
@@ -498,7 +499,20 @@ if not popup_mode:
                     retest_days=st.session_state.v3_retest_days,
                     max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
                 )
-                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                if st.session_state.v3_signal_filter in {"late", "failed"}:
+                    filtered = []
+                    for r in top_breakouts:
+                        is_confirmed = bool(r.get("retest_confirmed"))
+                        is_breakout = bool(r.get("breakout_candle_valid"))
+                        is_failed = bool(r.get("breakout_candle")) and (r.get("breakout_hold_ok") is False)
+                        is_late = bool(r.get("breakout_candle")) and (not is_breakout) and (not is_confirmed) and (not is_failed)
+                        if st.session_state.v3_signal_filter == "late" and is_late:
+                            filtered.append(r)
+                        elif st.session_state.v3_signal_filter == "failed" and is_failed:
+                            filtered.append(r)
+                    st.session_state.watchlist = [res['ticker'] for res in filtered[:20]]
+                else:
+                    st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
             st.rerun()
 
         st.sidebar.caption(
@@ -733,6 +747,10 @@ with tab_stocks:
                         filtered.append(r)
                 data_rows = filtered
 
+        if not data_rows:
+            st.warning("No matching signals for the selected Entry Style. Try a different universe or style.")
+            st.stop()
+
         # Top Metrics
         if breakout_model == "v3":
             strong_threshold = 8
@@ -744,7 +762,7 @@ with tab_stocks:
             strong_threshold = 4
             neutral_threshold = 2
         total_breakouts = len([r for r in data_rows if int(r.get('score', 0)) >= strong_threshold])
-        avg_rsi = sum([r['rsi'] for r in data_rows]) / len(data_rows)
+        avg_rsi = sum([r['rsi'] for r in data_rows]) / max(1, len(data_rows))
         
         col1, col2, col3 = st.columns(3)
         col1.metric(f"Strong Breakouts (Score {strong_threshold}+)", total_breakouts)
