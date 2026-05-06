@@ -1292,7 +1292,20 @@ def _filter_to_large_mid(tickers: list[str]) -> list[str]:
 def get_sector_large_cap_universe(mode: str) -> tuple[list[str], str]:
     m = str(mode or "").lower().strip()
     pinned = {
-        "sector-tech": ["0166.KL", "0097.KL", "3867.KL", "5005.KL", "0208.KL", "0128.KL", "5292.KL", "5286.KL", "6971.KL"],
+        "sector-tech": [
+            "0097.KL",
+            "0128.KL",
+            "0166.KL",
+            "0208.KL",
+            "3867.KL",
+            "4456.KL",
+            "5005.KL",
+            "5286.KL",
+            "5292.KL",
+            "7204.KL",
+            "7471.KL",
+            "9334.KL",
+        ],
         "sector-utilities": ["5347.KL", "6742.KL", "4677.KL", "5209.KL", "5264.KL"],
         "sector-infra": ["5398.KL", "3336.KL", "7277.KL", "3816.KL", "5246.KL"],
         "sector-property": ["5227.KL", "5212.KL", "5211.KL", "5176.KL", "5288.KL", "5263.KL", "5148.KL"],
@@ -1301,7 +1314,7 @@ def get_sector_large_cap_universe(mode: str) -> tuple[list[str], str]:
         "sector-healthcare": ["5225.KL", "5878.KL", "5168.KL", "7113.KL", "7153.KL", "7106.KL"],
         "sector-energy": ["5681.KL", "6033.KL", "5183.KL", "5210.KL", "5141.KL", "5199.KL"],
         "sector-plantation": ["5285.KL", "2445.KL", "1961.KL", "2291.KL", "2089.KL", "5012.KL"],
-        "sector-telco": ["4863.KL", "6012.KL", "5031.KL", "6399.KL"],
+        "sector-telco": ["4863.KL", "6012.KL", "5031.KL", "6399.KL", "6888.KL"],
         "sector-industrial": ["8869.KL", "4731.KL", "3794.KL", "9822.KL", "8125.KL"],
     }
     presets = {
@@ -1709,6 +1722,13 @@ def _load_universe_from_file(path: str):
 
 def get_stock_universe(mode: str = "curated"):
     m = str(mode or "").lower().strip()
+    if m in {"focus", "focus-sectors", "myfocus", "focus_large_mid"}:
+        parts = []
+        for k in ["sector-tech", "sector-energy", "sector-banks", "sector-utilities", "sector-infra", "sector-telco"]:
+            u, _ = get_sector_large_cap_universe(k)
+            parts.extend(u)
+        parts = sorted({str(x).upper().strip() for x in parts if _normalize_kl_ticker(x)})
+        return parts, "focus"
     if m.startswith("sector-"):
         u, src = get_sector_large_cap_universe(m)
         return u, src

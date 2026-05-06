@@ -292,6 +292,7 @@ if not popup_mode:
         st.sidebar.warning(f"Could not load {BURSA_UNIVERSE_FILE}. Falling back to curated universe.")
 
     universe_options = {
+        "Focus: Tech + Energy + Banks + Utilities + Infra + Telco (Large/Mid)": "focus",
         "Index: KLCI 30 (Big Cap)": "klci",
         "Index: FBM Mid 70": "fbm70",
         "Index: FBM Top 100": "fbm100",
@@ -335,7 +336,7 @@ if not popup_mode:
                 st.session_state.watchlist = list(universe_list[:20])
         st.rerun()
 
-    if st.session_state.universe_mode in {"klci", "fbm70", "fbm100", "smallcap"}:
+    if st.session_state.universe_mode in {"klci", "fbm70", "fbm100", "smallcap"} or str(st.session_state.universe_mode).startswith("sector-"):
         if "klci_auto_update" not in st.session_state:
             st.session_state.klci_auto_update = True
         try:
@@ -353,7 +354,7 @@ if not popup_mode:
                 else:
                     st.sidebar.caption(f"KLCI list: {src}")
                 update_label = "Update KLCI Now"
-            else:
+            elif st.session_state.universe_mode in {"fbm70", "fbm100", "smallcap"}:
                 update_label = "Update Index Now"
                 info = _core.get_index_components_info(st.session_state.universe_mode, max_age_days=30)
                 src = str(info.get("source") or "")
@@ -362,13 +363,25 @@ if not popup_mode:
                     st.sidebar.caption(f"Index list: {src}, updated {updated_at}")
                 else:
                     st.sidebar.caption(f"Index list: {src}")
+            else:
+                update_label = "Update Large/Mid Lists Now"
+                info_klci = _core.get_klci_components_info(max_age_days=30)
+                info_70 = _core.get_index_components_info("fbm70", max_age_days=30)
+                info_100 = _core.get_index_components_info("fbm100", max_age_days=30)
+                st.sidebar.caption(f"KLCI: {info_klci.get('source')}, {info_klci.get('updated_at') or 'n/a'}")
+                st.sidebar.caption(f"FBM70: {info_70.get('source')}, {info_70.get('updated_at') or 'n/a'}")
+                st.sidebar.caption(f"FBM100: {info_100.get('source')}, {info_100.get('updated_at') or 'n/a'}")
 
             if st.sidebar.button(update_label, use_container_width=True):
-                with st.spinner("Updating index constituents..."):
+                with st.spinner("Updating constituents..."):
                     if st.session_state.universe_mode == "klci":
                         _core.refresh_klci_components(force=True, max_age_days=30)
-                    else:
+                    elif st.session_state.universe_mode in {"fbm70", "fbm100", "smallcap"}:
                         _core.refresh_index_components(st.session_state.universe_mode, force=True, max_age_days=30)
+                    else:
+                        _core.refresh_klci_components(force=True, max_age_days=30)
+                        _core.refresh_index_components("fbm70", force=True, max_age_days=30)
+                        _core.refresh_index_components("fbm100", force=True, max_age_days=30)
                     top_breakouts = get_top_breakouts(
                         limit=20,
                         model=st.session_state.breakout_model,
