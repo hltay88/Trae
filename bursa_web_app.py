@@ -415,59 +415,39 @@ if not popup_mode:
             )
             st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
         st.rerun()
-        st.rerun()
+
 
     if st.session_state.breakout_model == "v3":
-        if st.sidebar.button("� Big Cap Early Entry", use_container_width=True):
-            st.session_state.universe_mode = "klci"
-            st.session_state.v3_signal_lookback = 5
-            st.session_state.v3_max_runup_pct = 5.0
-            st.session_state.v3_max_pullback_pct = 2.0
-            st.session_state.v3_retest_days = 0
-            with st.spinner("Applying V3 preset..."):
-                top_breakouts = get_top_breakouts(
-                    limit=20,
-                    model=st.session_state.breakout_model,
-                    universe_mode=st.session_state.universe_mode,
-                    sector_allowlist=st.session_state.sector_focus or None,
-                    signal_lookback=st.session_state.v3_signal_lookback,
-                    max_runup_pct=st.session_state.v3_max_runup_pct,
-                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                    retest_days=st.session_state.v3_retest_days,
-                )
-                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
-            st.rerun()
+        if "v3_entry_style" not in st.session_state:
+            st.session_state.v3_entry_style = "Early Entry"
 
-        if st.sidebar.button("��️ Big/Mid Cap Balanced", use_container_width=True):
-            st.session_state.v3_signal_lookback = 10
-            st.session_state.v3_max_runup_pct = 8.0
-            st.session_state.v3_max_pullback_pct = 3.0
-            st.session_state.v3_retest_days = 3
-            with st.spinner("Applying V3 preset..."):
-                top_breakouts = get_top_breakouts(
-                    limit=20,
-                    model=st.session_state.breakout_model,
-                    universe_mode=st.session_state.universe_mode,
-                    sector_allowlist=st.session_state.sector_focus or None,
-                    signal_lookback=st.session_state.v3_signal_lookback,
-                    max_runup_pct=st.session_state.v3_max_runup_pct,
-                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                    retest_days=st.session_state.v3_retest_days,
-                    max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
-                )
-                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
-            st.rerun()
-
-        v3_window = st.sidebar.radio(
-            "V3 Breakout Window",
-            [3, 5, 10],
-            index=1 if int(st.session_state.v3_signal_lookback) == 5 else (0 if int(st.session_state.v3_signal_lookback) == 3 else 2),
-            horizontal=True,
+        entry_label = st.sidebar.selectbox(
+            "Entry Style",
+            ["Early Entry (Recommended)", "Balanced", "Confirmed"],
+            index=0 if str(st.session_state.v3_entry_style).startswith("Early") else (1 if str(st.session_state.v3_entry_style).startswith("Balanced") else 2),
         )
-        v3_window = int(v3_window)
-        if v3_window != int(st.session_state.v3_signal_lookback):
-            st.session_state.v3_signal_lookback = v3_window
-            with st.spinner("Refreshing list for V3 breakout window..."):
+        selected_style = "Early Entry" if entry_label.startswith("Early") else ("Balanced" if entry_label.startswith("Balanced") else "Confirmed")
+
+        if selected_style != st.session_state.v3_entry_style:
+            st.session_state.v3_entry_style = selected_style
+
+            if selected_style == "Early Entry":
+                st.session_state.v3_signal_lookback = 5
+                st.session_state.v3_max_runup_pct = 5.0
+                st.session_state.v3_max_pullback_pct = 2.0
+                st.session_state.v3_retest_days = 0
+            elif selected_style == "Balanced":
+                st.session_state.v3_signal_lookback = 10
+                st.session_state.v3_max_runup_pct = 8.0
+                st.session_state.v3_max_pullback_pct = 3.0
+                st.session_state.v3_retest_days = 3
+            else:
+                st.session_state.v3_signal_lookback = 10
+                st.session_state.v3_max_runup_pct = None
+                st.session_state.v3_max_pullback_pct = 3.0
+                st.session_state.v3_retest_days = 5
+
+            with st.spinner("Applying entry style..."):
                 top_breakouts = get_top_breakouts(
                     limit=20,
                     model=st.session_state.breakout_model,
@@ -482,80 +462,112 @@ if not popup_mode:
                 st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
             st.rerun()
 
-        runup_label = st.sidebar.radio(
-            "V3 Max Run-up",
-            ["Off", "3%", "5%", "8%"],
-            index=0 if st.session_state.v3_max_runup_pct is None else (1 if float(st.session_state.v3_max_runup_pct) == 3.0 else (2 if float(st.session_state.v3_max_runup_pct) == 5.0 else 3)),
-            horizontal=True,
+        st.sidebar.caption(
+            f"V3 rules: {int(st.session_state.v3_signal_lookback)}d window, "
+            f"run-up {'Off' if st.session_state.v3_max_runup_pct is None else str(st.session_state.v3_max_runup_pct) + '%'}, "
+            f"pullback {'Off' if st.session_state.v3_max_pullback_pct is None else str(st.session_state.v3_max_pullback_pct) + '%'}, "
+            f"retest {'Off' if int(st.session_state.v3_retest_days) == 0 else str(int(st.session_state.v3_retest_days)) + 'd'}"
         )
-        runup_map = {"Off": None, "3%": 3.0, "5%": 5.0, "8%": 8.0}
-        new_runup = runup_map.get(runup_label, None)
-        if new_runup != st.session_state.v3_max_runup_pct:
-            st.session_state.v3_max_runup_pct = new_runup
-            with st.spinner("Refreshing list for V3 max run-up..."):
-                top_breakouts = get_top_breakouts(
-                    limit=20,
-                    model=st.session_state.breakout_model,
-                    universe_mode=st.session_state.universe_mode,
-                    sector_allowlist=st.session_state.sector_focus or None,
-                    signal_lookback=st.session_state.v3_signal_lookback,
-                    max_runup_pct=st.session_state.v3_max_runup_pct,
-                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                    retest_days=st.session_state.v3_retest_days,
-                    max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
-                )
-                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
-            st.rerun()
 
-        pullback_label = st.sidebar.radio(
-            "V3 Max Pullback",
-            ["Off", "0%", "2%", "3%"],
-            index=0 if st.session_state.v3_max_pullback_pct is None else (1 if float(st.session_state.v3_max_pullback_pct) == 0.0 else (2 if float(st.session_state.v3_max_pullback_pct) == 2.0 else 3)),
-            horizontal=True,
-        )
-        pullback_map = {"Off": None, "0%": 0.0, "2%": 2.0, "3%": 3.0}
-        new_pullback = pullback_map.get(pullback_label, None)
-        if new_pullback != st.session_state.v3_max_pullback_pct:
-            st.session_state.v3_max_pullback_pct = new_pullback
-            with st.spinner("Refreshing list for V3 pullback rule..."):
-                top_breakouts = get_top_breakouts(
-                    limit=20,
-                    model=st.session_state.breakout_model,
-                    universe_mode=st.session_state.universe_mode,
-                    sector_allowlist=st.session_state.sector_focus or None,
-                    signal_lookback=st.session_state.v3_signal_lookback,
-                    max_runup_pct=st.session_state.v3_max_runup_pct,
-                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                    retest_days=st.session_state.v3_retest_days,
-                    max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
-                )
-                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
-            st.rerun()
+        with st.sidebar.expander("Advanced V3 Filters", expanded=False):
+            v3_window = st.radio(
+                "V3 Breakout Window",
+                [3, 5, 10],
+                index=1 if int(st.session_state.v3_signal_lookback) == 5 else (0 if int(st.session_state.v3_signal_lookback) == 3 else 2),
+                horizontal=True,
+            )
+            v3_window = int(v3_window)
+            if v3_window != int(st.session_state.v3_signal_lookback):
+                st.session_state.v3_signal_lookback = v3_window
+                with st.spinner("Refreshing list..."):
+                    top_breakouts = get_top_breakouts(
+                        limit=20,
+                        model=st.session_state.breakout_model,
+                        universe_mode=st.session_state.universe_mode,
+                        sector_allowlist=st.session_state.sector_focus or None,
+                        signal_lookback=st.session_state.v3_signal_lookback,
+                        max_runup_pct=st.session_state.v3_max_runup_pct,
+                        max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                        retest_days=st.session_state.v3_retest_days,
+                        max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
+                    )
+                    st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                st.rerun()
 
-        retest_label = st.sidebar.radio(
-            "V3 Retest Confirm",
-            ["Off", "3d", "5d"],
-            index=0 if int(st.session_state.v3_retest_days) == 0 else (1 if int(st.session_state.v3_retest_days) == 3 else 2),
-            horizontal=True,
-        )
-        retest_map = {"Off": 0, "3d": 3, "5d": 5}
-        new_retest = int(retest_map.get(retest_label, 0))
-        if new_retest != int(st.session_state.v3_retest_days):
-            st.session_state.v3_retest_days = new_retest
-            with st.spinner("Refreshing list for V3 retest confirmation..."):
-                top_breakouts = get_top_breakouts(
-                    limit=20,
-                    model=st.session_state.breakout_model,
-                    universe_mode=st.session_state.universe_mode,
-                    sector_allowlist=st.session_state.sector_focus or None,
-                    signal_lookback=st.session_state.v3_signal_lookback,
-                    max_runup_pct=st.session_state.v3_max_runup_pct,
-                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                    retest_days=st.session_state.v3_retest_days,
-                    max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
-                )
-                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
-            st.rerun()
+            runup_label = st.radio(
+                "V3 Max Run-up",
+                ["Off", "3%", "5%", "8%"],
+                index=0 if st.session_state.v3_max_runup_pct is None else (1 if float(st.session_state.v3_max_runup_pct) == 3.0 else (2 if float(st.session_state.v3_max_runup_pct) == 5.0 else 3)),
+                horizontal=True,
+            )
+            runup_map = {"Off": None, "3%": 3.0, "5%": 5.0, "8%": 8.0}
+            new_runup = runup_map.get(runup_label, None)
+            if new_runup != st.session_state.v3_max_runup_pct:
+                st.session_state.v3_max_runup_pct = new_runup
+                with st.spinner("Refreshing list..."):
+                    top_breakouts = get_top_breakouts(
+                        limit=20,
+                        model=st.session_state.breakout_model,
+                        universe_mode=st.session_state.universe_mode,
+                        sector_allowlist=st.session_state.sector_focus or None,
+                        signal_lookback=st.session_state.v3_signal_lookback,
+                        max_runup_pct=st.session_state.v3_max_runup_pct,
+                        max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                        retest_days=st.session_state.v3_retest_days,
+                        max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
+                    )
+                    st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                st.rerun()
+
+            pullback_label = st.radio(
+                "V3 Max Pullback",
+                ["Off", "0%", "2%", "3%"],
+                index=0 if st.session_state.v3_max_pullback_pct is None else (1 if float(st.session_state.v3_max_pullback_pct) == 0.0 else (2 if float(st.session_state.v3_max_pullback_pct) == 2.0 else 3)),
+                horizontal=True,
+            )
+            pullback_map = {"Off": None, "0%": 0.0, "2%": 2.0, "3%": 3.0}
+            new_pullback = pullback_map.get(pullback_label, None)
+            if new_pullback != st.session_state.v3_max_pullback_pct:
+                st.session_state.v3_max_pullback_pct = new_pullback
+                with st.spinner("Refreshing list..."):
+                    top_breakouts = get_top_breakouts(
+                        limit=20,
+                        model=st.session_state.breakout_model,
+                        universe_mode=st.session_state.universe_mode,
+                        sector_allowlist=st.session_state.sector_focus or None,
+                        signal_lookback=st.session_state.v3_signal_lookback,
+                        max_runup_pct=st.session_state.v3_max_runup_pct,
+                        max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                        retest_days=st.session_state.v3_retest_days,
+                        max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
+                    )
+                    st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                st.rerun()
+
+            retest_label = st.radio(
+                "V3 Retest Confirm",
+                ["Off", "3d", "5d"],
+                index=0 if int(st.session_state.v3_retest_days) == 0 else (1 if int(st.session_state.v3_retest_days) == 3 else 2),
+                horizontal=True,
+            )
+            retest_map = {"Off": 0, "3d": 3, "5d": 5}
+            new_retest = int(retest_map.get(retest_label, 0))
+            if new_retest != int(st.session_state.v3_retest_days):
+                st.session_state.v3_retest_days = new_retest
+                with st.spinner("Refreshing list..."):
+                    top_breakouts = get_top_breakouts(
+                        limit=20,
+                        model=st.session_state.breakout_model,
+                        universe_mode=st.session_state.universe_mode,
+                        sector_allowlist=st.session_state.sector_focus or None,
+                        signal_lookback=st.session_state.v3_signal_lookback,
+                        max_runup_pct=st.session_state.v3_max_runup_pct,
+                        max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                        retest_days=st.session_state.v3_retest_days,
+                        max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
+                    )
+                    st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                st.rerun()
 
     sectors = sorted({str(v.get("sector")).strip() for v in MARKET_INSIGHTS.values() if str(v.get("sector") or "").strip()})
     if sectors:
