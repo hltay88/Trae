@@ -359,6 +359,26 @@ if not popup_mode:
         st.rerun()
 
     if st.session_state.breakout_model == "v3":
+        if st.sidebar.button("🎛️ Big/Mid Cap Balanced", use_container_width=True):
+            st.session_state.v3_signal_lookback = 10
+            st.session_state.v3_max_runup_pct = 8.0
+            st.session_state.v3_max_pullback_pct = 3.0
+            st.session_state.v3_retest_days = 3
+            with st.spinner("Applying V3 preset..."):
+                top_breakouts = get_top_breakouts(
+                    limit=20,
+                    model=st.session_state.breakout_model,
+                    universe_mode=st.session_state.universe_mode,
+                    sector_allowlist=st.session_state.sector_focus or None,
+                    signal_lookback=st.session_state.v3_signal_lookback,
+                    max_runup_pct=st.session_state.v3_max_runup_pct,
+                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                    retest_days=st.session_state.v3_retest_days,
+                    max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
+                )
+                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+            st.rerun()
+
         v3_window = st.sidebar.radio(
             "V3 Breakout Window",
             [3, 5, 10],

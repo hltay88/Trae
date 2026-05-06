@@ -18,9 +18,9 @@ if not exist ".yfinance_cache" (
     mkdir ".yfinance_cache"
 )
 
-:: Run the analyzer GUI
-:: Using the specific python path provided in the original script
-"C:\Users\lawre\AppData\Local\Python\pythoncore-3.14-64\python.exe" "bursa_analyzer_gui.py"
+:: Run the desktop wrapper (full feature set)
+:: It launches the Streamlit app in a desktop window (or browser fallback)
+"C:\Users\lawre\AppData\Local\Python\pythoncore-3.14-64\python.exe" "bursa_desktop_app.py"
 
 if %ERRORLEVEL% neq 0 (
     echo.
