@@ -287,13 +287,23 @@ if not popup_mode:
     if universe_src != "file" and st.session_state.universe_mode == "file":
         st.sidebar.warning(f"Could not load {BURSA_UNIVERSE_FILE}. Falling back to curated universe.")
 
-    universe_label = st.sidebar.radio(
-        "Universe",
-        ["Big Cap (KLCI 30)", "Curated (Fast)", "From File (Full)", "Auto (Malaysia)"],
-        index=0 if st.session_state.universe_mode == "klci" else (1 if st.session_state.universe_mode == "curated" else (2 if st.session_state.universe_mode == "file" else 3)),
-        horizontal=True,
-    )
-    selected_universe = "klci" if universe_label.startswith("Big") else ("curated" if universe_label.startswith("Curated") else ("file" if universe_label.startswith("From") else "auto"))
+    universe_options = {
+        "Index: KLCI 30 (Big Cap)": "klci",
+        "Index: FBM Mid 70": "fbm70",
+        "Index: FBM Top 100": "fbm100",
+        "Index: FBM Small Cap": "smallcap",
+        "Sector: Tech & Semicon (Large/Mid)": "sector-tech",
+        "Sector: Utilities & Infra": "sector-utilities",
+        "Sector: Property & REIT": "sector-property",
+        "Sector: Consumer": "sector-consumer",
+        "Curated (Fast)": "curated",
+        "From File (Full)": "file",
+        "Auto (Malaysia)": "auto",
+    }
+    inv_universe = {v: k for k, v in universe_options.items()}
+    current_label = inv_universe.get(st.session_state.universe_mode, "Curated (Fast)")
+    universe_label = st.sidebar.selectbox("Universe", list(universe_options.keys()), index=list(universe_options.keys()).index(current_label))
+    selected_universe = universe_options.get(universe_label, "curated")
     if selected_universe != st.session_state.universe_mode:
         st.session_state.universe_mode = selected_universe
         with st.spinner("Refreshing list for selected universe..."):
@@ -310,6 +320,55 @@ if not popup_mode:
             )
             st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
         st.rerun()
+
+    if st.session_state.universe_mode in {"klci", "fbm70", "fbm100", "smallcap"}:
+        if "klci_auto_update" not in st.session_state:
+            st.session_state.klci_auto_update = True
+        try:
+            import bursa_core as _core
+            st.session_state.klci_auto_update = st.sidebar.checkbox("Auto-update index constituents", value=bool(st.session_state.klci_auto_update))
+            _core.KLCI_AUTO_UPDATE_ENABLED = bool(st.session_state.klci_auto_update)
+            _core.INDEX_AUTO_UPDATE_ENABLED = bool(st.session_state.klci_auto_update)
+
+            if st.session_state.universe_mode == "klci":
+                info = _core.get_klci_components_info(max_age_days=30)
+                src = str(info.get("source") or "")
+                updated_at = info.get("updated_at")
+                if updated_at:
+                    st.sidebar.caption(f"KLCI list: {src}, updated {updated_at}")
+                else:
+                    st.sidebar.caption(f"KLCI list: {src}")
+                update_label = "Update KLCI Now"
+            else:
+                update_label = "Update Index Now"
+                info = _core.get_index_components_info(st.session_state.universe_mode, max_age_days=30)
+                src = str(info.get("source") or "")
+                updated_at = info.get("updated_at")
+                if updated_at:
+                    st.sidebar.caption(f"Index list: {src}, updated {updated_at}")
+                else:
+                    st.sidebar.caption(f"Index list: {src}")
+
+            if st.sidebar.button(update_label, use_container_width=True):
+                with st.spinner("Updating index constituents..."):
+                    if st.session_state.universe_mode == "klci":
+                        _core.refresh_klci_components(force=True, max_age_days=30)
+                    else:
+                        _core.refresh_index_components(st.session_state.universe_mode, force=True, max_age_days=30)
+                    top_breakouts = get_top_breakouts(
+                        limit=20,
+                        model=st.session_state.breakout_model,
+                        universe_mode=st.session_state.universe_mode,
+                        sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+                        signal_lookback=st.session_state.v3_signal_lookback,
+                        max_runup_pct=st.session_state.v3_max_runup_pct,
+                        max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                        retest_days=st.session_state.v3_retest_days,
+                    )
+                    st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                st.rerun()
+        except Exception:
+            pass
 
     if st.session_state.universe_mode == "auto":
         st.sidebar.caption("Auto universe downloads & caches a Malaysia stock list; the first run may take longer.")
@@ -379,7 +438,7 @@ if not popup_mode:
                 st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
             st.rerun()
 
-        if st.sidebar.button("�🎛️ Big/Mid Cap Balanced", use_container_width=True):
+        if st.sidebar.button("��️ Big/Mid Cap Balanced", use_container_width=True):
             st.session_state.v3_signal_lookback = 10
             st.session_state.v3_max_runup_pct = 8.0
             st.session_state.v3_max_pullback_pct = 3.0

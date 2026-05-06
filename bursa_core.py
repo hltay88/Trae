@@ -4,7 +4,7 @@ import datetime
 import requests
 import re
 import csv
-import csv
+import time
 
 cache_path = os.path.join(os.getcwd(), ".yfinance_cache")
 if os.environ.get("STREAMLIT_SERVER_PORT") or not os.access(os.getcwd(), os.W_OK):
@@ -913,6 +913,354 @@ KLCI_COMPONENTS = [
     "1082.KL", "0166.KL", "5296.KL", "5246.KL", "4677.KL"
 ]
 
+KLCI_AUTO_UPDATE_ENABLED = True
+KLCI_COMPONENTS_AUTO_FILE = os.path.join(os.path.dirname(__file__), "klci_components_auto.txt")
+
+INDEX_AUTO_UPDATE_ENABLED = True
+INDEX_COMPONENTS_CACHE_DIR = os.path.join(os.path.dirname(__file__), "index_components_cache")
+try:
+    os.makedirs(INDEX_COMPONENTS_CACHE_DIR, exist_ok=True)
+except Exception:
+    pass
+
+
+def _read_text_lines(path: str) -> list[str]:
+    try:
+        if not path or not os.path.exists(path):
+            return []
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return [line.strip() for line in f.readlines()]
+    except Exception:
+        return []
+
+
+def _write_text_lines(path: str, lines: list[str]) -> bool:
+    try:
+        if not path:
+            return False
+        with open(path, "w", encoding="utf-8") as f:
+            for line in lines:
+                f.write(f"{line}\n")
+        return True
+    except Exception:
+        return False
+
+
+def _normalize_kl_ticker(x: str) -> str | None:
+    try:
+        s = str(x).strip().upper()
+        if not s:
+            return None
+        s = s.replace(" ", "")
+        if s.endswith(".KL"):
+            s = s[:-3]
+        if s.isdigit() and len(s) == 4:
+            return f"{s}.KL"
+        return None
+    except Exception:
+        return None
+
+
+def _normalize_bm_code(x: str) -> str | None:
+    try:
+        s = str(x).strip().upper().replace(" ", "")
+        if not s:
+            return None
+        if s.endswith(".KL"):
+            s = s[:-3]
+        if s.isdigit() and len(s) == 4:
+            return s
+        return None
+    except Exception:
+        return None
+
+
+def _extract_kl_codes_from_text(text: str) -> list[str]:
+    try:
+        if not text:
+            return []
+        codes = re.findall(r"\b(\d{4})\.KL\b", text.upper())
+        return sorted({f"{c}.KL" for c in codes})
+    except Exception:
+        return []
+
+
+def _resolve_tradingview_symbol_to_kl(ticker_symbol: str, company_name: str | None = None) -> str | None:
+    try:
+        sym = str(ticker_symbol or "").strip().upper()
+        if not sym:
+            return None
+        code = _normalize_bm_code(sym)
+        if code:
+            return f"{code}.KL"
+
+        if company_name:
+            m = _best_ticker_match_by_name(company_name)
+            if m:
+                return m
+
+        t = search_bursa(sym)
+        if t:
+            return t
+        if company_name:
+            t = search_bursa(company_name)
+            if t:
+                return t
+        return None
+    except Exception:
+        return None
+
+
+def _fetch_investingmalaysia_index_tickers(slug: str, max_pages: int = 12, max_seconds: float = 25.0) -> list[str]:
+    try:
+        t0 = time.time() if 'time' in globals() else None
+        base = f"https://investingmalaysia.com/category/ftse-bursa-malaysia-index/{slug}/"
+        headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
+        all_codes = set()
+        for p in range(1, int(max_pages) + 1):
+            if t0 is not None and (time.time() - t0) > float(max_seconds):
+                break
+            url = base if p == 1 else base + f"page/{p}/"
+            try:
+                r = requests.get(url, headers=headers, timeout=25)
+                if r.status_code != 200:
+                    break
+                html = r.text or ""
+            except Exception:
+                break
+
+            found = set(re.findall(r"/stock/[^/]+-(\d{4})/", html))
+            if not found:
+                break
+            before = len(all_codes)
+            all_codes |= found
+            if len(all_codes) == before:
+                break
+        tickers = sorted({f"{c}.KL" for c in all_codes if c and str(c).isdigit() and len(str(c)) == 4})
+        return tickers
+    except Exception:
+        return []
+
+
+def refresh_index_components(index_key: str, force: bool = False, max_age_days: int = 30) -> tuple[list[str], str]:
+    key = str(index_key or "").lower().strip()
+    defs = {
+        "fbm70": {
+            "slug": "fbm-mid-70",
+            "min": 50,
+            "max": 130,
+            "pages": 8,
+        },
+        "fbm100": {
+            "slug": "fbm-top-100",
+            "min": 70,
+            "max": 160,
+            "pages": 8,
+        },
+        "smallcap": {
+            "slug": "fbm-small-cap",
+            "min": 50,
+            "max": 400,
+            "pages": 10,
+        },
+    }
+    if key not in defs:
+        return [], "unknown"
+
+    cache_file = os.path.join(INDEX_COMPONENTS_CACHE_DIR, f"{key}.txt")
+
+    try:
+        if not force and os.path.exists(cache_file):
+            try:
+                age_s = (pd.Timestamp.now() - pd.Timestamp.fromtimestamp(os.path.getmtime(cache_file))).total_seconds()
+                if age_s < float(max_age_days) * 86400.0:
+                    cached = [_normalize_kl_ticker(x) for x in _read_text_lines(cache_file)]
+                    cached = sorted({x for x in cached if x})
+                    if defs[key]["min"] <= len(cached) <= defs[key]["max"]:
+                        return cached, "cache"
+            except Exception:
+                pass
+
+        resolved = _fetch_investingmalaysia_index_tickers(defs[key]["slug"], max_pages=int(defs[key].get("pages") or 10), max_seconds=25.0)
+        resolved = sorted({_normalize_kl_ticker(x) for x in resolved if _normalize_kl_ticker(x)})
+        if defs[key]["min"] <= len(resolved) <= defs[key]["max"]:
+            _write_text_lines(cache_file, [t.replace(".KL", "") for t in resolved])
+            return resolved, "investingmalaysia"
+        return [], "investingmalaysia"
+    except Exception:
+        return [], "error"
+
+
+def get_index_components_info(index_key: str, max_age_days: int = 30) -> dict:
+    key = str(index_key or "").lower().strip()
+    cache_file = os.path.join(INDEX_COMPONENTS_CACHE_DIR, f"{key}.txt")
+    try:
+        tickers, src = refresh_index_components(key, force=False, max_age_days=max_age_days)
+        updated = None
+        if os.path.exists(cache_file):
+            try:
+                updated = pd.Timestamp.fromtimestamp(os.path.getmtime(cache_file)).isoformat()
+            except Exception:
+                updated = None
+        return {"tickers": tickers, "source": src, "updated_at": updated}
+    except Exception:
+        return {"tickers": [], "source": "error", "updated_at": None}
+
+
+def _find_tickers_by_name_keywords(keywords: list[str], max_hits: int = 80) -> list[str]:
+    out = []
+    try:
+        kw = [str(k).strip().upper() for k in (keywords or []) if str(k).strip()]
+        if not kw:
+            return []
+
+        name_map = {}
+        try:
+            name_map = _load_auto_universe_name_map()
+        except Exception:
+            name_map = {}
+
+        if name_map:
+            for t, n in name_map.items():
+                name_u = str(n).upper()
+                if any(k in name_u for k in kw):
+                    out.append(str(t).upper())
+                    if len(out) >= max_hits:
+                        break
+
+        if len(out) < max_hits:
+            for t, v in MARKET_INSIGHTS.items():
+                name_u = str(v.get("name") or "").upper()
+                if any(k in name_u for k in kw):
+                    out.append(str(t).upper())
+                    if len(out) >= max_hits:
+                        break
+
+        out = sorted({_normalize_kl_ticker(x) for x in out if _normalize_kl_ticker(x)})
+        return out
+    except Exception:
+        return sorted({_normalize_kl_ticker(x) for x in out if _normalize_kl_ticker(x)})
+
+
+def get_sector_large_cap_universe(mode: str) -> tuple[list[str], str]:
+    m = str(mode or "").lower().strip()
+    presets = {
+        "sector-tech": ["INARI", "VITROX", "MPI", "UNISEM", "GREATECH", "D&O", "D&O", "D&O GREEN", "FRONTKN"],
+        "sector-utilities": ["YTL", "YTLPOWER", "TENAGA", "IJM", "GAMUDA", "DIALOG", "MALAKOFF", "PETGAS", "PETDAG"],
+        "sector-property": ["IGBREIT", "PAVREIT", "SUNWAY", "IOIPROPG", "SIMEPROP", "UEMSUNRISE"],
+        "sector-consumer": ["HEINEKEN", "CARLSBERG", "NESTLE", "QL", "MRDIY", "PPB"],
+    }
+    if m not in presets:
+        return [], "unknown"
+    u = _find_tickers_by_name_keywords(presets[m], max_hits=120)
+    return u, m
+
+
+def _fetch_klci_from_yahoo() -> list[str]:
+    try:
+        url = "https://finance.yahoo.com/quote/%5EKLSE/components"
+        r = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            timeout=25,
+        )
+        if r.status_code != 200:
+            return []
+        tickers = _extract_kl_codes_from_text(r.text)
+        if 25 <= len(tickers) <= 40:
+            return tickers
+        return []
+    except Exception:
+        return []
+
+
+def _fetch_klci_from_wikipedia() -> list[str]:
+    try:
+        from bs4 import BeautifulSoup
+
+        url = "https://en.wikipedia.org/wiki/FTSE_Bursa_Malaysia_KLCI"
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=25)
+        if r.status_code != 200:
+            return []
+        soup = BeautifulSoup(r.text, "html.parser")
+        anchor = soup.find(id="Constituents")
+        if not anchor:
+            return []
+        table = anchor.find_parent().find_next("table", class_="wikitable")
+        if not table:
+            return []
+        header_row = table.find("tr")
+        headers = [th.get_text(" ", strip=True).lower() for th in header_row.find_all("th")] if header_row else []
+        code_idx = None
+        for i, h in enumerate(headers):
+            if "code" in h or "stock code" in h or "ticker" in h or "symbol" in h:
+                code_idx = i
+                break
+        if code_idx is None:
+            return []
+
+        out = []
+        for row in table.find_all("tr")[1:]:
+            cells = row.find_all(["td", "th"])
+            if not cells or len(cells) <= code_idx:
+                continue
+            cell_text = cells[code_idx].get_text(" ", strip=True)
+            m = re.search(r"\b(\d{4})\b", str(cell_text))
+            if not m:
+                continue
+            out.append(f"{m.group(1)}.KL")
+
+        out = sorted(set(out))
+        if 25 <= len(out) <= 40:
+            return out
+        return []
+    except Exception:
+        return []
+
+
+def refresh_klci_components(force: bool = False, max_age_days: int = 30) -> tuple[list[str], str]:
+    try:
+        if not force and os.path.exists(KLCI_COMPONENTS_AUTO_FILE):
+            try:
+                age_s = (pd.Timestamp.now() - pd.Timestamp.fromtimestamp(os.path.getmtime(KLCI_COMPONENTS_AUTO_FILE))).total_seconds()
+                if age_s < float(max_age_days) * 86400.0:
+                    cached = [_normalize_kl_ticker(x) for x in _read_text_lines(KLCI_COMPONENTS_AUTO_FILE)]
+                    cached = [x for x in cached if x]
+                    if 25 <= len(cached) <= 40:
+                        return cached, "cache"
+            except Exception:
+                pass
+
+        for src, fn in [("yahoo", _fetch_klci_from_yahoo), ("wikipedia", _fetch_klci_from_wikipedia)]:
+            u = fn() or []
+            u = [_normalize_kl_ticker(x) for x in u]
+            u = [x for x in u if x]
+            u = sorted(set(u))
+            if 25 <= len(u) <= 40:
+                _write_text_lines(KLCI_COMPONENTS_AUTO_FILE, [t.replace(".KL", "") for t in u])
+                return u, src
+
+        return list(KLCI_COMPONENTS), "static"
+    except Exception:
+        return list(KLCI_COMPONENTS), "static"
+
+
+def get_klci_components_info(max_age_days: int = 30) -> dict:
+    try:
+        tickers, src = refresh_klci_components(force=False, max_age_days=max_age_days)
+        updated = None
+        if os.path.exists(KLCI_COMPONENTS_AUTO_FILE):
+            try:
+                updated = pd.Timestamp.fromtimestamp(os.path.getmtime(KLCI_COMPONENTS_AUTO_FILE)).isoformat()
+            except Exception:
+                updated = None
+        return {"tickers": tickers, "source": src, "updated_at": updated}
+    except Exception:
+        return {"tickers": list(KLCI_COMPONENTS), "source": "static", "updated_at": None}
+
 STOCK_DISCOVERY_UNIVERSE = sorted(
     set(
         KLCI_COMPONENTS
@@ -928,6 +1276,7 @@ BURSA_UNIVERSE_FILE = os.path.join(os.path.dirname(__file__), "bursa_universe.cs
 BURSA_UNIVERSE_AUTO_FILE = os.path.join(os.path.dirname(__file__), "bursa_universe_auto.csv")
 
 _AUTO_UNIVERSE_NAME_CACHE = {"mtime": None, "map": {}}
+_AUTO_UNIVERSE_NAME_NORM_CACHE = {"mtime": None, "tokens": {}}
 
 
 def _read_universe_codes(raw_codes):
@@ -984,6 +1333,11 @@ def _load_auto_universe_name_map():
                     out[code] = name
             _AUTO_UNIVERSE_NAME_CACHE["mtime"] = mtime
             _AUTO_UNIVERSE_NAME_CACHE["map"] = out
+            try:
+                _AUTO_UNIVERSE_NAME_NORM_CACHE["mtime"] = mtime
+                _AUTO_UNIVERSE_NAME_NORM_CACHE["tokens"] = {}
+            except Exception:
+                pass
             return out
         except Exception:
             _AUTO_UNIVERSE_NAME_CACHE["mtime"] = mtime
@@ -999,6 +1353,82 @@ def _auto_universe_name(ticker: str):
         if not t:
             return None
         return _load_auto_universe_name_map().get(t)
+    except Exception:
+        return None
+
+
+def _name_tokens(s: str) -> set[str]:
+    try:
+        x = str(s or "").upper()
+        x = x.replace("&", " AND ")
+        x = re.sub(r"[^A-Z0-9 ]+", " ", x)
+        x = re.sub(r"\s+", " ", x).strip()
+        if not x:
+            return set()
+        drop = {
+            "BERHAD",
+            "BHD",
+            "BHDS",
+            "GROUP",
+            "HOLDINGS",
+            "HOLDING",
+            "MALAYSIA",
+            "INTERNATIONAL",
+            "CORPORATION",
+            "CORP",
+            "COMPANY",
+            "CO",
+            "PUBLIC",
+            "LIMITED",
+            "LTD",
+            "SDN",
+            "BHD",
+            "THE",
+        }
+        toks = [t for t in x.split(" ") if t and t not in drop]
+        return set(toks)
+    except Exception:
+        return set()
+
+
+def _best_ticker_match_by_name(company_name: str) -> str | None:
+    try:
+        target = _name_tokens(company_name)
+        if len(target) < 2:
+            return None
+        name_map = _load_auto_universe_name_map()
+        if not name_map:
+            return None
+
+        mtime = None
+        try:
+            mtime = os.path.getmtime(BURSA_UNIVERSE_AUTO_FILE)
+        except Exception:
+            mtime = None
+
+        if _AUTO_UNIVERSE_NAME_NORM_CACHE.get("mtime") != mtime or not _AUTO_UNIVERSE_NAME_NORM_CACHE.get("tokens"):
+            tok_map = {}
+            for t, n in name_map.items():
+                tok_map[t] = _name_tokens(n)
+            _AUTO_UNIVERSE_NAME_NORM_CACHE["mtime"] = mtime
+            _AUTO_UNIVERSE_NAME_NORM_CACHE["tokens"] = tok_map
+
+        tok_map = _AUTO_UNIVERSE_NAME_NORM_CACHE.get("tokens") or {}
+        best_t = None
+        best_score = 0.0
+        for t, toks in tok_map.items():
+            if not toks:
+                continue
+            inter = len(target & toks)
+            if inter == 0:
+                continue
+            score = inter / float(max(len(target), len(toks)))
+            if score > best_score:
+                best_score = score
+                best_t = t
+        if best_t and best_score >= 0.5:
+            return str(best_t).upper().strip()
+        return None
     except Exception:
         return None
 
@@ -1092,8 +1522,33 @@ def _load_universe_from_file(path: str):
 
 def get_stock_universe(mode: str = "curated"):
     m = str(mode or "").lower().strip()
+    if m.startswith("sector-"):
+        u, src = get_sector_large_cap_universe(m)
+        if u:
+            return u, src
     if m in {"klci", "big", "bigcap", "large", "largecap"}:
-        return list(KLCI_COMPONENTS), "klci"
+        if KLCI_AUTO_UPDATE_ENABLED:
+            u, src = refresh_klci_components(force=False, max_age_days=30)
+            return u, f"klci-{src}"
+        return list(KLCI_COMPONENTS), "klci-static"
+    if m in {"fbm70", "mid70", "m70"}:
+        if INDEX_AUTO_UPDATE_ENABLED:
+            u, src = refresh_index_components("fbm70", force=False, max_age_days=30)
+            if u:
+                return u, f"fbm70-{src}"
+        return [], "fbm70-unavailable"
+    if m in {"fbm100", "top100", "t100", "top_100"}:
+        if INDEX_AUTO_UPDATE_ENABLED:
+            u, src = refresh_index_components("fbm100", force=False, max_age_days=30)
+            if u:
+                return u, f"fbm100-{src}"
+        return [], "fbm100-unavailable"
+    if m in {"smallcap", "small", "sc"}:
+        if INDEX_AUTO_UPDATE_ENABLED:
+            u, src = refresh_index_components("smallcap", force=False, max_age_days=30)
+            if u:
+                return u, f"smallcap-{src}"
+        return [], "smallcap-unavailable"
     if m in {"auto", "malaysia", "my"}:
         u = _load_or_refresh_auto_universe()
         if u:
