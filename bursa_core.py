@@ -1236,40 +1236,89 @@ def _find_tickers_by_name_keywords(keywords: list[str], max_hits: int = 80) -> l
         return sorted({_normalize_kl_ticker(x) for x in out if _normalize_kl_ticker(x)})
 
 
-def _large_cap_membership_set(max_age_days: int = 30) -> set[str]:
+def _top100_membership_set(max_age_days: int = 30) -> set[str]:
+    try:
+        fbm100, _ = refresh_index_components("fbm100", force=False, max_age_days=max_age_days)
+        fbm100 = [str(x).upper().strip() for x in (fbm100 or []) if x]
+        if len(fbm100) >= 70:
+            return set(fbm100)
+    except Exception:
+        pass
+
     s = set()
     try:
         s |= set(refresh_klci_components(force=False, max_age_days=max_age_days)[0] or [])
     except Exception:
         s |= set(list(KLCI_COMPONENTS))
     try:
-        s |= set(refresh_index_components("fbm100", force=False, max_age_days=max_age_days)[0] or [])
+        fbm70, _ = refresh_index_components("fbm70", force=False, max_age_days=max_age_days)
+        if fbm70:
+            s |= set(fbm70)
     except Exception:
         pass
+    if s:
+        out = {str(x).upper().strip() for x in s if x}
+        if len(out) >= 40:
+            return out
+
     try:
-        s |= set(refresh_index_components("fbm70", force=False, max_age_days=max_age_days)[0] or [])
+        curated = set(STOCK_DISCOVERY_UNIVERSE)
+        curated = {str(x).upper().strip() for x in curated if x}
+        if curated:
+            return curated
     except Exception:
         pass
-    return {str(x).upper().strip() for x in s if x}
+
+    return {str(x).upper().strip() for x in list(KLCI_COMPONENTS)}
 
 
-def _prefer_large_caps(tickers: list[str], min_keep: int = 8) -> list[str]:
+def _filter_to_large_mid(tickers: list[str]) -> list[str]:
     u = [str(x).upper().strip() for x in (tickers or []) if _normalize_kl_ticker(x)]
     u = [x for x in u if x]
-    large = _large_cap_membership_set(max_age_days=30)
-    if not large:
+    membership = set()
+    try:
+        membership |= _top100_membership_set(max_age_days=30)
+    except Exception:
+        membership |= {str(x).upper().strip() for x in list(KLCI_COMPONENTS)}
+    try:
+        membership |= {str(x).upper().strip() for x in MARKET_INSIGHTS.keys()}
+    except Exception:
+        pass
+    if not membership:
         return sorted(set(u))
-    large_hits = [t for t in u if t in large]
-    if len(large_hits) >= int(min_keep):
-        return sorted(set(large_hits))
-    rest = [t for t in u if t not in large]
-    return sorted(set(large_hits + rest))
+    return sorted({t for t in u if t in membership})
 
 
 def get_sector_large_cap_universe(mode: str) -> tuple[list[str], str]:
     m = str(mode or "").lower().strip()
+    pinned = {
+        "sector-tech": ["0166.KL", "0097.KL", "3867.KL", "5005.KL", "0208.KL", "0128.KL", "5292.KL", "5286.KL", "6971.KL"],
+        "sector-utilities": ["5347.KL", "6742.KL", "4677.KL", "5209.KL", "5264.KL"],
+        "sector-infra": ["5398.KL", "3336.KL", "7277.KL", "3816.KL", "5246.KL"],
+        "sector-property": ["5227.KL", "5212.KL", "5211.KL", "5176.KL", "5288.KL", "5263.KL", "5148.KL"],
+        "sector-consumer": ["4707.KL", "2836.KL", "3255.KL", "3689.KL", "7084.KL", "5296.KL", "4065.KL"],
+        "sector-banks": ["1155.KL", "1023.KL", "1295.KL", "1066.KL", "5819.KL", "2488.KL", "5258.KL", "5185.KL"],
+        "sector-healthcare": ["5225.KL", "5878.KL", "5168.KL", "7113.KL", "7153.KL", "7106.KL"],
+        "sector-energy": ["5681.KL", "6033.KL", "5183.KL", "5210.KL", "5141.KL", "5199.KL"],
+        "sector-plantation": ["5285.KL", "2445.KL", "1961.KL", "2291.KL", "2089.KL", "5012.KL"],
+        "sector-telco": ["4863.KL", "6012.KL", "5031.KL", "6399.KL"],
+        "sector-industrial": ["8869.KL", "4731.KL", "3794.KL", "9822.KL", "8125.KL"],
+    }
     presets = {
-        "sector-tech": ["INARI", "VITROX", "MPI", "UNISEM", "GREATECH", "D&O", "DNEX", "FRONTKEN", "UWC", "MI TECH", "KOBAY"],
+        "sector-tech": [
+            "INARI",
+            "VITROX",
+            "MALAYSIAN PACIFIC",
+            "UNISEM",
+            "GREATECH",
+            "D&O",
+            "D&O GREEN",
+            "DNEX",
+            "FRONTKEN",
+            "UWC",
+            "MI TECHNOVATION",
+            "KOBAY",
+        ],
         "sector-utilities": ["YTL", "YTL POWER", "TENAGA", "MALAKOFF", "RANHILL", "GAS MALAYSIA"],
         "sector-infra": ["IJM", "GAMUDA", "DIALOG", "MISC", "WESTPORTS"],
         "sector-property": ["IGB REIT", "PAVILION REIT", "SUNWAY", "SUNWAY REIT", "IOI PROPERTIES", "SIME DARBY PROPERTY", "UEM SUNRISE", "SP SETIA"],
@@ -1283,8 +1332,14 @@ def get_sector_large_cap_universe(mode: str) -> tuple[list[str], str]:
     }
     if m not in presets:
         return [], "unknown"
-    u = _find_tickers_by_name_keywords(presets[m], max_hits=200)
-    u = _prefer_large_caps(u, min_keep=6)
+    u = _find_tickers_by_name_keywords(presets[m], max_hits=250)
+
+    keep = set(_filter_to_large_mid(u))
+    for t in pinned.get(m, []):
+        nt = _normalize_kl_ticker(t)
+        if nt:
+            keep.add(nt)
+    u = sorted(keep)
     return u, m
 
 
@@ -1656,8 +1711,7 @@ def get_stock_universe(mode: str = "curated"):
     m = str(mode or "").lower().strip()
     if m.startswith("sector-"):
         u, src = get_sector_large_cap_universe(m)
-        if u:
-            return u, src
+        return u, src
     if m in {"klci", "big", "bigcap", "large", "largecap"}:
         if KLCI_AUTO_UPDATE_ENABLED:
             u, src = refresh_klci_components(force=False, max_age_days=30)
