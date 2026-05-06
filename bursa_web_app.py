@@ -420,32 +420,71 @@ if not popup_mode:
     if st.session_state.breakout_model == "v3":
         if "v3_entry_style" not in st.session_state:
             st.session_state.v3_entry_style = "Early Entry"
+        if "v3_signal_filter" not in st.session_state:
+            st.session_state.v3_signal_filter = "all"
 
-        entry_label = st.sidebar.selectbox(
-            "Entry Style",
-            ["Early Entry (Recommended)", "Balanced", "Confirmed"],
-            index=0 if str(st.session_state.v3_entry_style).startswith("Early") else (1 if str(st.session_state.v3_entry_style).startswith("Balanced") else 2),
-        )
-        selected_style = "Early Entry" if entry_label.startswith("Early") else ("Balanced" if entry_label.startswith("Balanced") else "Confirmed")
+        entry_options = [
+            "Early Entry (Recommended)",
+            "Balanced",
+            "Confirmed",
+            "Late (Chasing Risk)",
+            "Failed (Breakout Broke)",
+        ]
+        entry_idx = 0
+        if str(st.session_state.v3_entry_style).startswith("Balanced"):
+            entry_idx = 1
+        elif str(st.session_state.v3_entry_style).startswith("Confirmed"):
+            entry_idx = 2
+        elif str(st.session_state.v3_entry_style).startswith("Late"):
+            entry_idx = 3
+        elif str(st.session_state.v3_entry_style).startswith("Failed"):
+            entry_idx = 4
+
+        entry_label = st.sidebar.selectbox("Entry Style", entry_options, index=entry_idx)
+        if entry_label.startswith("Early"):
+            selected_style = "Early Entry"
+        elif entry_label.startswith("Balanced"):
+            selected_style = "Balanced"
+        elif entry_label.startswith("Confirmed"):
+            selected_style = "Confirmed"
+        elif entry_label.startswith("Late"):
+            selected_style = "Late"
+        else:
+            selected_style = "Failed"
 
         if selected_style != st.session_state.v3_entry_style:
             st.session_state.v3_entry_style = selected_style
 
             if selected_style == "Early Entry":
+                st.session_state.v3_signal_filter = "all"
                 st.session_state.v3_signal_lookback = 5
                 st.session_state.v3_max_runup_pct = 5.0
                 st.session_state.v3_max_pullback_pct = 2.0
                 st.session_state.v3_retest_days = 0
             elif selected_style == "Balanced":
+                st.session_state.v3_signal_filter = "all"
                 st.session_state.v3_signal_lookback = 10
                 st.session_state.v3_max_runup_pct = 8.0
                 st.session_state.v3_max_pullback_pct = 3.0
                 st.session_state.v3_retest_days = 3
-            else:
+            elif selected_style == "Confirmed":
+                st.session_state.v3_signal_filter = "all"
                 st.session_state.v3_signal_lookback = 10
                 st.session_state.v3_max_runup_pct = None
                 st.session_state.v3_max_pullback_pct = 3.0
                 st.session_state.v3_retest_days = 5
+            elif selected_style == "Late":
+                st.session_state.v3_signal_filter = "late"
+                st.session_state.v3_signal_lookback = 10
+                st.session_state.v3_max_runup_pct = 5.0
+                st.session_state.v3_max_pullback_pct = 2.0
+                st.session_state.v3_retest_days = 0
+            else:
+                st.session_state.v3_signal_filter = "failed"
+                st.session_state.v3_signal_lookback = 10
+                st.session_state.v3_max_runup_pct = None
+                st.session_state.v3_max_pullback_pct = 2.0
+                st.session_state.v3_retest_days = 0
 
             with st.spinner("Applying entry style..."):
                 top_breakouts = get_top_breakouts(
@@ -679,6 +718,21 @@ with tab_stocks:
                     data_rows.append(analysis)
 
     if data_rows:
+        if breakout_model == "v3":
+            sig_filter = str(st.session_state.get("v3_signal_filter", "all") or "all").lower().strip()
+            if sig_filter in {"late", "failed"}:
+                filtered = []
+                for r in data_rows:
+                    is_confirmed = bool(r.get("retest_confirmed"))
+                    is_breakout = bool(r.get("breakout_candle_valid"))
+                    is_failed = bool(r.get("breakout_candle")) and (r.get("breakout_hold_ok") is False)
+                    is_late = bool(r.get("breakout_candle")) and (not is_breakout) and (not is_confirmed) and (not is_failed)
+                    if sig_filter == "late" and is_late:
+                        filtered.append(r)
+                    elif sig_filter == "failed" and is_failed:
+                        filtered.append(r)
+                data_rows = filtered
+
         # Top Metrics
         if breakout_model == "v3":
             strong_threshold = 8
