@@ -1092,6 +1092,8 @@ def _load_universe_from_file(path: str):
 
 def get_stock_universe(mode: str = "curated"):
     m = str(mode or "").lower().strip()
+    if m in {"klci", "big", "bigcap", "large", "largecap"}:
+        return list(KLCI_COMPONENTS), "klci"
     if m in {"auto", "malaysia", "my"}:
         u = _load_or_refresh_auto_universe()
         if u:

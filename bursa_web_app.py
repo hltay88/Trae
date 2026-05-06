@@ -289,11 +289,11 @@ if not popup_mode:
 
     universe_label = st.sidebar.radio(
         "Universe",
-        ["Curated (Fast)", "From File (Full)", "Auto (Malaysia)"],
-        index=0 if st.session_state.universe_mode == "curated" else (1 if st.session_state.universe_mode == "file" else 2),
+        ["Big Cap (KLCI 30)", "Curated (Fast)", "From File (Full)", "Auto (Malaysia)"],
+        index=0 if st.session_state.universe_mode == "klci" else (1 if st.session_state.universe_mode == "curated" else (2 if st.session_state.universe_mode == "file" else 3)),
         horizontal=True,
     )
-    selected_universe = "curated" if universe_label.startswith("Curated") else ("file" if universe_label.startswith("From") else "auto")
+    selected_universe = "klci" if universe_label.startswith("Big") else ("curated" if universe_label.startswith("Curated") else ("file" if universe_label.startswith("From") else "auto"))
     if selected_universe != st.session_state.universe_mode:
         st.session_state.universe_mode = selected_universe
         with st.spinner("Refreshing list for selected universe..."):
@@ -359,7 +359,27 @@ if not popup_mode:
         st.rerun()
 
     if st.session_state.breakout_model == "v3":
-        if st.sidebar.button("🎛️ Big/Mid Cap Balanced", use_container_width=True):
+        if st.sidebar.button("� Big Cap Early Entry", use_container_width=True):
+            st.session_state.universe_mode = "klci"
+            st.session_state.v3_signal_lookback = 5
+            st.session_state.v3_max_runup_pct = 5.0
+            st.session_state.v3_max_pullback_pct = 2.0
+            st.session_state.v3_retest_days = 0
+            with st.spinner("Applying V3 preset..."):
+                top_breakouts = get_top_breakouts(
+                    limit=20,
+                    model=st.session_state.breakout_model,
+                    universe_mode=st.session_state.universe_mode,
+                    sector_allowlist=st.session_state.sector_focus or None,
+                    signal_lookback=st.session_state.v3_signal_lookback,
+                    max_runup_pct=st.session_state.v3_max_runup_pct,
+                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                    retest_days=st.session_state.v3_retest_days,
+                )
+                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+            st.rerun()
+
+        if st.sidebar.button("�🎛️ Big/Mid Cap Balanced", use_container_width=True):
             st.session_state.v3_signal_lookback = 10
             st.session_state.v3_max_runup_pct = 8.0
             st.session_state.v3_max_pullback_pct = 3.0
