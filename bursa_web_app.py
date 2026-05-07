@@ -588,10 +588,18 @@ if not popup_mode:
             st.session_state.v3_breakout_day_only = False
         if "v3_filter_note" not in st.session_state:
             st.session_state.v3_filter_note = None
+        if "v3_today_only" not in st.session_state:
+            st.session_state.v3_today_only = False
         st.session_state.v3_breakout_day_only = st.sidebar.toggle(
             "Breakout-day entry only",
             value=bool(st.session_state.v3_breakout_day_only),
             help="Shows only ⚡ BREAKOUT signals with run-up within the current V3 Max Run-up setting.",
+        )
+
+        st.session_state.v3_today_only = st.sidebar.toggle(
+            "Today breakout only",
+            value=bool(st.session_state.v3_today_only),
+            help="Shows only ⚡ BREAKOUT signals where the breakout candle happened today (MYT).",
         )
 
         with st.sidebar.expander("Advanced V3 Filters", expanded=False):
@@ -836,6 +844,23 @@ with tab_stocks:
                     if max_runup is not None and float(r.get("runup_pct")) > float(max_runup):
                         continue
                     tmp.append(r)
+                filtered = tmp
+
+            if bool(st.session_state.get("v3_today_only")):
+                today = pd.Timestamp.now(tz="Asia/Kuala_Lumpur").date()
+                tmp = []
+                for r in filtered:
+                    if not bool(r.get("breakout_candle_valid")):
+                        continue
+                    d = r.get("breakout_candle_date")
+                    if not d:
+                        continue
+                    try:
+                        dd = pd.to_datetime(d).date()
+                    except Exception:
+                        continue
+                    if dd == today:
+                        tmp.append(r)
                 filtered = tmp
 
             if not filtered:
