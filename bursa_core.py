@@ -254,13 +254,23 @@ def get_stock_data(ticker, period="1y"):
                 base_name = v['name']
                 break
 
+    def _resolve_best_name() -> str:
+        try:
+            n = str(base_name or ticker)
+            auto_name = _auto_universe_name(ticker)
+            if auto_name:
+                return str(auto_name)
+            return n
+        except Exception:
+            return str(base_name or ticker)
+
     mode = str(globals().get("PRICE_CACHE_MODE", "fast") or "fast").lower().strip()
     max_age = int(globals().get("PRICE_CACHE_MAX_AGE_SECONDS", 0) or 0)
     if mode in {"fast", "offline"}:
         cached_df, meta = _read_price_cache(ticker)
         if cached_df is not None and not cached_df.empty:
             if mode == "offline":
-                return cached_df, base_name
+                return cached_df, _resolve_best_name()
             try:
                 age_s = time.time() - float((meta or {}).get("mtime") or 0)
                 if max_age <= 0 or age_s <= float(max_age):
@@ -273,7 +283,7 @@ def get_stock_data(ticker, period="1y"):
                                 return dfc, base_name
                             except Exception:
                                 pass
-                    return cached_df, base_name
+                    return cached_df, _resolve_best_name()
             except Exception:
                 pass
     
@@ -523,7 +533,7 @@ def get_stock_data(ticker, period="1y"):
 
     cached_df, _ = _read_price_cache(ticker)
     if cached_df is not None and not cached_df.empty:
-        return cached_df, base_name
+        return cached_df, _resolve_best_name()
     return None, base_name
 
 def _is_today_kl(ts) -> bool:
