@@ -550,6 +550,13 @@ if not popup_mode:
                     st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
             st.rerun()
 
+        if selected_style == "Early Entry":
+            if st.session_state.v3_signal_lookback != 5 or st.session_state.v3_max_runup_pct is None or st.session_state.v3_max_pullback_pct is None:
+                st.session_state.v3_signal_lookback = 5
+                st.session_state.v3_max_runup_pct = 5.0
+                st.session_state.v3_max_pullback_pct = 2.0
+                st.session_state.v3_retest_days = 0
+
         st.sidebar.caption(
             f"V3 rules: {int(st.session_state.v3_signal_lookback)}d window, "
             f"run-up {'Off' if st.session_state.v3_max_runup_pct is None else str(st.session_state.v3_max_runup_pct) + '%'}, "
@@ -890,6 +897,7 @@ with tab_stocks:
         st.warning("No data found. Please click 'Refresh Market Discovery' or add valid tickers.")
         st.caption(f"Fetch summary: {fetch_success}/{fetch_attempted} tickers returned data.")
         st.caption("If this stays 0, Yahoo data may be blocked/rate-limited in your environment. Try again later, reduce scan size, or switch to a smaller universe (KLCI/Top100).")
+        st.caption("Optional fallback: set BURSA_PRICE_API_BASE_URL and BURSA_PRICE_API_KEY in your environment to use a non-Yahoo data source.")
 
 with tab_futures:
     st.markdown("### ⛓️ Malaysian Futures Dashboard")

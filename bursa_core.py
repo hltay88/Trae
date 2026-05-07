@@ -265,6 +265,79 @@ def get_stock_data(ticker, period="1y"):
         except Exception:
             return None
 
+    def _fetch_bursa_price_api(sym: str, outputsize: str = "compact"):
+        try:
+            base_url = os.environ.get("BURSA_PRICE_API_BASE_URL")
+            api_key = os.environ.get("BURSA_PRICE_API_KEY")
+            if not base_url or not api_key:
+                return None
+
+            symbol_raw = str(sym or "").strip().upper()
+            if symbol_raw.endswith(".KL"):
+                symbol_raw = symbol_raw[:-3]
+            if symbol_raw.isdigit() and len(symbol_raw) == 4:
+                symbol_try = symbol_raw
+            else:
+                symbol_try = symbol_raw
+
+            params = {
+                "function": "TIME_SERIES_DAILY",
+                "symbol": symbol_try,
+                "outputsize": outputsize,
+                "datatype": "json",
+                "apikey": api_key,
+            }
+            r = requests.get(
+                base_url,
+                params=params,
+                headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"},
+                timeout=25,
+            )
+            if r.status_code != 200:
+                return None
+            j = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
+            if not isinstance(j, dict):
+                return None
+
+            ts = j.get("Time Series (Daily)") or j.get("TIME_SERIES_DAILY") or j.get("time_series_daily")
+            if not isinstance(ts, dict) or not ts:
+                return None
+
+            rows = []
+            for date_str, v in ts.items():
+                if not isinstance(v, dict):
+                    continue
+                def _pick(*keys):
+                    for k in keys:
+                        if k in v and v[k] is not None:
+                            return v[k]
+                    return None
+
+                o = _pick("1. open", "open", "o")
+                h = _pick("2. high", "high", "h")
+                l = _pick("3. low", "low", "l")
+                c = _pick("4. close", "close", "c")
+                vol = _pick("5. volume", "volume", "v")
+                if c is None:
+                    continue
+                rows.append(
+                    {
+                        "Date": pd.to_datetime(date_str),
+                        "Open": float(o) if o is not None else None,
+                        "High": float(h) if h is not None else None,
+                        "Low": float(l) if l is not None else None,
+                        "Close": float(c) if c is not None else None,
+                        "Volume": float(vol) if vol is not None else None,
+                    }
+                )
+            if not rows:
+                return None
+            df = pd.DataFrame(rows).set_index("Date").sort_index()
+            df = df.dropna(subset=["Close"])
+            return df if not df.empty else None
+        except Exception:
+            return None
+
     period_map = {
         "1mo": "1mo",
         "3mo": "3mo",
@@ -329,6 +402,22 @@ def get_stock_data(ticker, period="1y"):
                 except Exception:
                     pass
                 return df2, name
+        except Exception:
+            pass
+
+        try:
+            df3 = _fetch_bursa_price_api(symbol, outputsize="compact")
+            if df3 is None and str(period).lower().strip() in {"2y", "5y", "10y", "max"}:
+                df3 = _fetch_bursa_price_api(symbol, outputsize="full")
+            if df3 is not None and not df3.empty:
+                name = base_name
+                try:
+                    auto_name = _auto_universe_name(symbol) or _auto_universe_name(ticker)
+                    if auto_name:
+                        name = auto_name
+                except Exception:
+                    pass
+                return df3, name
         except Exception:
             pass
     return None, base_name
