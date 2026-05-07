@@ -339,11 +339,19 @@ if not popup_mode:
     if st.session_state.universe_mode in {"klci", "fbm70", "fbm100", "smallcap"} or str(st.session_state.universe_mode).startswith("sector-"):
         if "klci_auto_update" not in st.session_state:
             st.session_state.klci_auto_update = True
+        if "index_force_refresh" not in st.session_state:
+            st.session_state.index_force_refresh = False
         try:
             import bursa_core as _core
             st.session_state.klci_auto_update = st.sidebar.checkbox("Auto-update index constituents", value=bool(st.session_state.klci_auto_update))
+            st.session_state.index_force_refresh = st.sidebar.checkbox(
+                "Force refresh (no cache)",
+                value=bool(st.session_state.index_force_refresh),
+                help="When enabled, index constituents are fetched from the source each run (slower).",
+            )
             _core.KLCI_AUTO_UPDATE_ENABLED = bool(st.session_state.klci_auto_update)
             _core.INDEX_AUTO_UPDATE_ENABLED = bool(st.session_state.klci_auto_update)
+            _core.INDEX_FORCE_REFRESH = bool(st.session_state.index_force_refresh)
 
             if st.session_state.universe_mode == "klci":
                 info = _core.get_klci_components_info(max_age_days=30)
@@ -551,9 +559,19 @@ if not popup_mode:
                             filtered.append(r)
                         elif st.session_state.v3_signal_filter == "failed" and is_failed:
                             filtered.append(r)
-                    st.session_state.watchlist = [res['ticker'] for res in filtered[:20]]
+                    if filtered:
+                        st.session_state.watchlist = [res['ticker'] for res in filtered[:20]]
+                        st.session_state.v3_filter_note = None
+                    else:
+                        st.session_state.v3_filter_note = "No matching Late/Failed signals found in the scanned universe. Showing the default list instead."
+                        if top_breakouts:
+                            st.session_state.watchlist = [res['ticker'] for res in top_breakouts[:20]]
+                        else:
+                            fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
+                            st.session_state.watchlist = list(fallback_universe[:20])
                 else:
                     st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                    st.session_state.v3_filter_note = None
             st.rerun()
 
 
@@ -568,6 +586,8 @@ if not popup_mode:
 
         if "v3_breakout_day_only" not in st.session_state:
             st.session_state.v3_breakout_day_only = False
+        if "v3_filter_note" not in st.session_state:
+            st.session_state.v3_filter_note = None
         st.session_state.v3_breakout_day_only = st.sidebar.toggle(
             "Breakout-day entry only",
             value=bool(st.session_state.v3_breakout_day_only),
@@ -685,6 +705,33 @@ if not popup_mode:
             st.rerun()
 
     st.sidebar.markdown("---")
+    st.sidebar.header("📡 Data")
+    if "price_data_mode" not in st.session_state:
+        st.session_state.price_data_mode = "fast"
+    if "tv_price_overlay" not in st.session_state:
+        st.session_state.tv_price_overlay = False
+    try:
+        import bursa_core as _core
+        mode_label = st.sidebar.selectbox(
+            "Price Data",
+            ["Fast (cache 15 min)", "Latest (no cache)", "Offline (cache only)"],
+            index=0 if st.session_state.price_data_mode == "fast" else (1 if st.session_state.price_data_mode == "latest" else 2),
+            help="Fast reduces rate limits by caching recent OHLCV; Latest always re-fetches; Offline uses last cached candles.",
+        )
+        st.session_state.price_data_mode = "fast" if mode_label.startswith("Fast") else ("latest" if mode_label.startswith("Latest") else "offline")
+        _core.PRICE_CACHE_MODE = st.session_state.price_data_mode
+        _core.PRICE_CACHE_MAX_AGE_SECONDS = 15 * 60
+
+        st.session_state.tv_price_overlay = st.sidebar.checkbox(
+            "Overlay TradingView last price",
+            value=bool(st.session_state.tv_price_overlay),
+            help="Replaces the latest Close with TradingView last price (MYX-####). Uses a short cache to reduce requests.",
+        )
+        _core.TRADINGVIEW_PRICE_OVERLAY_ENABLED = bool(st.session_state.tv_price_overlay)
+    except Exception:
+        pass
+
+    st.sidebar.markdown("---")
     st.sidebar.header("➕ Add Custom Stock")
     new_stock = st.sidebar.text_input("Enter Name, Code or Futures (e.g., GENTING, 0166, FKLI)")
     if st.sidebar.button("Add to Watchlist", use_container_width=True):
@@ -758,8 +805,12 @@ with tab_stocks:
                     data_rows.append(analysis)
 
     if data_rows:
+        if breakout_model == "v3" and st.session_state.get("v3_filter_note"):
+            st.info(str(st.session_state.get("v3_filter_note")))
+
         if breakout_model == "v3":
             sig_filter = str(st.session_state.get("v3_signal_filter", "all") or "all").lower().strip()
+            original_rows = list(data_rows)
             filtered = data_rows
             if sig_filter in {"late", "failed"}:
                 tmp = []
@@ -787,7 +838,11 @@ with tab_stocks:
                     tmp.append(r)
                 filtered = tmp
 
-            data_rows = filtered
+            if not filtered:
+                st.warning("No matching rows for the selected V3 filter. Showing the full list instead.")
+                data_rows = original_rows
+            else:
+                data_rows = filtered
 
         if not data_rows:
             st.warning("No matching signals for the selected Entry Style. Try a different universe or style.")
@@ -861,6 +916,8 @@ with tab_stocks:
     else:
         st.warning("No data found. Please click 'Refresh Market Discovery' or add valid tickers.")
         st.caption(f"Fetch summary: {fetch_success}/{fetch_attempted} tickers returned data.")
+        if fetch_attempted == 0:
+            st.caption("Watchlist is empty. Try switching universe, clicking 'Refresh Market Discovery', or 'Reset to Top 20'.")
         st.caption("If this stays 0, Yahoo data may be blocked/rate-limited in your environment. Try again later, reduce scan size, or switch to a smaller universe (KLCI/Top100).")
         st.caption("Optional fallback: set BURSA_PRICE_API_BASE_URL and BURSA_PRICE_API_KEY in your environment to use a non-Yahoo data source.")
 

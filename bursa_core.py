@@ -76,6 +76,44 @@ def _tradingview_last_price_myr(symbol_path: str):
         return None
 
 
+TRADINGVIEW_PRICE_OVERLAY_ENABLED = False
+TRADINGVIEW_PRICE_CACHE_SECONDS = 60
+_TV_PRICE_CACHE: dict[str, tuple[float, float]] = {}
+
+
+def _tradingview_last_price_cached_myr(symbol_path: str) -> float | None:
+    try:
+        key = str(symbol_path or "").strip()
+        if not key:
+            return None
+        now = time.time()
+        hit = _TV_PRICE_CACHE.get(key)
+        if hit and (now - float(hit[0])) <= float(TRADINGVIEW_PRICE_CACHE_SECONDS):
+            return float(hit[1])
+        p = _tradingview_last_price_myr(key)
+        if p is None:
+            return None
+        _TV_PRICE_CACHE[key] = (now, float(p))
+        return float(p)
+    except Exception:
+        return None
+
+
+def tradingview_last_price_for_ticker_myr(ticker: str) -> float | None:
+    try:
+        t = str(ticker or "").upper().strip()
+        if not t:
+            return None
+        if t in {"FKLI=F", "FCPO=F"}:
+            return None
+        code = t.split(".")[0]
+        if code.isdigit() and len(code) == 4:
+            return _tradingview_last_price_cached_myr(f"MYX-{code}")
+        return None
+    except Exception:
+        return None
+
+
 def _synthetic_price_df(price: float, rows: int = 90):
     idx = pd.date_range(end=pd.Timestamp.now(tz="Asia/Kuala_Lumpur"), periods=rows, freq="B")
     df = pd.DataFrame(
@@ -215,6 +253,29 @@ def get_stock_data(ticker, period="1y"):
             if v.get('code') == code:
                 base_name = v['name']
                 break
+
+    mode = str(globals().get("PRICE_CACHE_MODE", "fast") or "fast").lower().strip()
+    max_age = int(globals().get("PRICE_CACHE_MAX_AGE_SECONDS", 0) or 0)
+    if mode in {"fast", "offline"}:
+        cached_df, meta = _read_price_cache(ticker)
+        if cached_df is not None and not cached_df.empty:
+            if mode == "offline":
+                return cached_df, base_name
+            try:
+                age_s = time.time() - float((meta or {}).get("mtime") or 0)
+                if max_age <= 0 or age_s <= float(max_age):
+                    if bool(globals().get("TRADINGVIEW_PRICE_OVERLAY_ENABLED")):
+                        p = tradingview_last_price_for_ticker_myr(ticker)
+                        if p is not None and "Close" in cached_df.columns:
+                            try:
+                                dfc = cached_df.copy()
+                                dfc.iloc[-1, dfc.columns.get_loc("Close")] = float(p)
+                                return dfc, base_name
+                            except Exception:
+                                pass
+                    return cached_df, base_name
+            except Exception:
+                pass
     
     def _fetch_yahoo_chart(sym: str, rng: str, interval: str = "1d"):
         try:
@@ -385,6 +446,19 @@ def get_stock_data(ticker, period="1y"):
                         name = yf_info.get('shortName') or yf_info.get('longName') or name
                     except:
                         pass
+                try:
+                    _write_price_cache(ticker, df)
+                except Exception:
+                    pass
+
+                if bool(globals().get("TRADINGVIEW_PRICE_OVERLAY_ENABLED")):
+                    p = tradingview_last_price_for_ticker_myr(ticker)
+                    if p is not None and "Close" in df.columns:
+                        try:
+                            df = df.copy()
+                            df.iloc[-1, df.columns.get_loc("Close")] = float(p)
+                        except Exception:
+                            pass
                 return df, name
         except Exception:
             continue
@@ -401,6 +475,19 @@ def get_stock_data(ticker, period="1y"):
                         name = auto_name
                 except Exception:
                     pass
+                try:
+                    _write_price_cache(ticker, df2)
+                except Exception:
+                    pass
+
+                if bool(globals().get("TRADINGVIEW_PRICE_OVERLAY_ENABLED")):
+                    p = tradingview_last_price_for_ticker_myr(ticker)
+                    if p is not None and "Close" in df2.columns:
+                        try:
+                            df2 = df2.copy()
+                            df2.iloc[-1, df2.columns.get_loc("Close")] = float(p)
+                        except Exception:
+                            pass
                 return df2, name
         except Exception:
             pass
@@ -417,9 +504,26 @@ def get_stock_data(ticker, period="1y"):
                         name = auto_name
                 except Exception:
                     pass
+                try:
+                    _write_price_cache(ticker, df3)
+                except Exception:
+                    pass
+
+                if bool(globals().get("TRADINGVIEW_PRICE_OVERLAY_ENABLED")):
+                    p = tradingview_last_price_for_ticker_myr(ticker)
+                    if p is not None and "Close" in df3.columns:
+                        try:
+                            df3 = df3.copy()
+                            df3.iloc[-1, df3.columns.get_loc("Close")] = float(p)
+                        except Exception:
+                            pass
                 return df3, name
         except Exception:
             pass
+
+    cached_df, _ = _read_price_cache(ticker)
+    if cached_df is not None and not cached_df.empty:
+        return cached_df, base_name
     return None, base_name
 
 def _is_today_kl(ts) -> bool:
@@ -1083,11 +1187,55 @@ KLCI_AUTO_UPDATE_ENABLED = True
 KLCI_COMPONENTS_AUTO_FILE = os.path.join(os.path.dirname(__file__), "klci_components_auto.txt")
 
 INDEX_AUTO_UPDATE_ENABLED = True
+INDEX_FORCE_REFRESH = False
 INDEX_COMPONENTS_CACHE_DIR = os.path.join(os.path.dirname(__file__), "index_components_cache")
 try:
     os.makedirs(INDEX_COMPONENTS_CACHE_DIR, exist_ok=True)
 except Exception:
     pass
+
+PRICE_CACHE_DIR = os.path.join(os.path.dirname(__file__), "price_cache")
+PRICE_CACHE_MODE = "fast"  # fast|latest|offline
+PRICE_CACHE_MAX_AGE_SECONDS = 15 * 60
+try:
+    os.makedirs(PRICE_CACHE_DIR, exist_ok=True)
+except Exception:
+    pass
+
+
+def _price_cache_path(ticker: str) -> str:
+    safe = re.sub(r"[^A-Z0-9._-]+", "_", str(ticker or "").upper())
+    return os.path.join(PRICE_CACHE_DIR, f"{safe}.csv")
+
+
+def _read_price_cache(ticker: str) -> tuple[pd.DataFrame | None, dict | None]:
+    try:
+        path = _price_cache_path(ticker)
+        if not os.path.exists(path):
+            return None, None
+        df = pd.read_csv(path)
+        if "Date" not in df.columns:
+            return None, None
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df = df.dropna(subset=["Date"]).set_index("Date").sort_index()
+        meta = {"path": path, "mtime": os.path.getmtime(path)}
+        return df, meta
+    except Exception:
+        return None, None
+
+
+def _write_price_cache(ticker: str, df: pd.DataFrame) -> None:
+    try:
+        if df is None or df.empty:
+            return
+        path = _price_cache_path(ticker)
+        out = df.copy()
+        out = out[[c for c in ["Open", "High", "Low", "Close", "Volume"] if c in out.columns]]
+        out = out.dropna(subset=["Close"]).tail(2000)
+        out = out.reset_index().rename(columns={out.index.name or "index": "Date"})
+        out.to_csv(path, index=False)
+    except Exception:
+        return
 
 
 def _read_text_lines(path: str) -> list[str]:
@@ -1846,24 +1994,24 @@ def get_stock_universe(mode: str = "curated"):
         return u, src
     if m in {"klci", "big", "bigcap", "large", "largecap"}:
         if KLCI_AUTO_UPDATE_ENABLED:
-            u, src = refresh_klci_components(force=False, max_age_days=30)
+            u, src = refresh_klci_components(force=bool(INDEX_FORCE_REFRESH), max_age_days=30)
             return u, f"klci-{src}"
         return list(KLCI_COMPONENTS), "klci-static"
     if m in {"fbm70", "mid70", "m70"}:
         if INDEX_AUTO_UPDATE_ENABLED:
-            u, src = refresh_index_components("fbm70", force=False, max_age_days=30)
+            u, src = refresh_index_components("fbm70", force=bool(INDEX_FORCE_REFRESH), max_age_days=30)
             if u:
                 return u, f"fbm70-{src}"
         return [], "fbm70-unavailable"
     if m in {"fbm100", "top100", "t100", "top_100"}:
         if INDEX_AUTO_UPDATE_ENABLED:
-            u, src = refresh_index_components("fbm100", force=False, max_age_days=30)
+            u, src = refresh_index_components("fbm100", force=bool(INDEX_FORCE_REFRESH), max_age_days=30)
             if u:
                 return u, f"fbm100-{src}"
         return [], "fbm100-unavailable"
     if m in {"smallcap", "small", "sc"}:
         if INDEX_AUTO_UPDATE_ENABLED:
-            u, src = refresh_index_components("smallcap", force=False, max_age_days=30)
+            u, src = refresh_index_components("smallcap", force=bool(INDEX_FORCE_REFRESH), max_age_days=30)
             if u:
                 return u, f"smallcap-{src}"
         return [], "smallcap-unavailable"
