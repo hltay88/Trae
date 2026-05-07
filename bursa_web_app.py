@@ -557,6 +557,8 @@ if not popup_mode:
             f"retest {'Off' if int(st.session_state.v3_retest_days) == 0 else str(int(st.session_state.v3_retest_days)) + 'd'}"
         )
 
+        st.sidebar.caption("Note: V3 is stricter than V1/V2. A stock can rank high in V1 but show no V3 signal if it lacks a recent power-candle + volume breakout.")
+
         with st.sidebar.expander("Advanced V3 Filters", expanded=False):
             v3_window = st.radio(
                 "V3 Breakout Window",
@@ -762,13 +764,14 @@ with tab_stocks:
                         df,
                         name,
                         benchmark_df=benchmark_df,
+                        min_rows=min(120, len(df)),
                         signal_lookback=st.session_state.v3_signal_lookback,
                         max_runup_pct=st.session_state.v3_max_runup_pct,
                         max_pullback_pct=st.session_state.v3_max_pullback_pct,
                         retest_days=st.session_state.v3_retest_days,
-                    ) or analyze_breakout_v2(t, df, name, benchmark_df=benchmark_df) or analyze_breakout(t, df, name)
+                    )
                 elif breakout_model == "v2":
-                    analysis = analyze_breakout_v2(t, df, name, benchmark_df=benchmark_df) or analyze_breakout(t, df, name)
+                    analysis = analyze_breakout_v2(t, df, name, benchmark_df=benchmark_df, min_rows=min(120, len(df)))
                 else:
                     analysis = analyze_breakout(t, df, name)
                 if analysis:
@@ -798,17 +801,23 @@ with tab_stocks:
         if breakout_model == "v3":
             strong_threshold = 8
             neutral_threshold = 5
+            total_breakouts = len([r for r in data_rows if bool(r.get("retest_confirmed")) or bool(r.get("breakout_candle_valid"))])
+            metric_label = "Valid V3 Signals"
         elif breakout_model == "v2":
             strong_threshold = 7
             neutral_threshold = 4
+            total_breakouts = len([r for r in data_rows if int(r.get('score', 0)) >= strong_threshold])
+            metric_label = f"Strong Breakouts (Score {strong_threshold}+)"
         else:
             strong_threshold = 4
             neutral_threshold = 2
-        total_breakouts = len([r for r in data_rows if int(r.get('score', 0)) >= strong_threshold])
+            total_breakouts = len([r for r in data_rows if int(r.get('score', 0)) >= strong_threshold])
+            metric_label = f"Strong Breakouts (Score {strong_threshold}+)"
+
         avg_rsi = sum([r['rsi'] for r in data_rows]) / max(1, len(data_rows))
         
         col1, col2, col3 = st.columns(3)
-        col1.metric(f"Strong Breakouts (Score {strong_threshold}+)", total_breakouts)
+        col1.metric(metric_label, total_breakouts)
         col2.metric("Watchlist Count", len(data_rows))
         col3.metric("Avg Watchlist RSI", f"{avg_rsi:.1f}")
 
@@ -821,6 +830,19 @@ with tab_stocks:
             linked_name = f'<a href="{link}" target="_blank" rel="noopener noreferrer">{r["name"]}</a>'
             score_max = int(r.get("score_max", 5))
             score_val = int(r.get("score", 0))
+
+            if breakout_model == "v3":
+                if r.get("retest_confirmed"):
+                    status = "🔥 STRONG"
+                elif r.get("breakout_candle_valid"):
+                    status = "🔥 STRONG"
+                elif r.get("breakout_55"):
+                    status = "⚖️ NEUTRAL"
+                else:
+                    status = "⚖️ NEUTRAL" if score_val >= neutral_threshold else "❄️ WEAK"
+            else:
+                status = "🔥 STRONG" if score_val >= strong_threshold else ("⚖️ NEUTRAL" if score_val >= neutral_threshold else "❄️ WEAK")
+
             display_rows.append({
                 "Ticker": r['ticker'],
                 "Name": linked_name,
@@ -833,7 +855,7 @@ with tab_stocks:
                 "Retest": "✅" if r.get("retest_confirmed") else ("⏳" if (int(r.get("retest_days") or 0) > 0 and r.get("breakout_candle_valid")) else ""),
                 "Retest Date": r.get("retest_touch_date", ""),
                 "Run-up %": "" if r.get("runup_pct") is None else f"{float(r.get('runup_pct')):.1f}%",
-                "Status": "🔥 STRONG" if score_val >= strong_threshold else ("⚖️ NEUTRAL" if score_val >= neutral_threshold else "❄️ WEAK"),
+                "Status": status,
                 "Catalyst / Insight": r['catalyst'] if score_val >= neutral_threshold else r['analysis']
             })
         
