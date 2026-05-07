@@ -590,6 +590,8 @@ if not popup_mode:
             st.session_state.v3_filter_note = None
         if "v3_today_only" not in st.session_state:
             st.session_state.v3_today_only = False
+        if "v3_age_1d" not in st.session_state:
+            st.session_state.v3_age_1d = True
         st.session_state.v3_breakout_day_only = st.sidebar.toggle(
             "Breakout-day entry only",
             value=bool(st.session_state.v3_breakout_day_only),
@@ -600,6 +602,12 @@ if not popup_mode:
             "Today breakout only",
             value=bool(st.session_state.v3_today_only),
             help="Shows only ⚡ BREAKOUT signals where the breakout candle happened today (MYT).",
+        )
+
+        st.session_state.v3_age_1d = st.sidebar.toggle(
+            "Breakout within 1 trading day",
+            value=bool(st.session_state.v3_age_1d),
+            help="Shows ⚡ BREAKOUT signals whose breakout candle is today or yesterday (more practical with free daily data).",
         )
 
         with st.sidebar.expander("Advanced V3 Filters", expanded=False):
@@ -860,6 +868,20 @@ with tab_stocks:
                     except Exception:
                         continue
                     if dd == today:
+                        tmp.append(r)
+                filtered = tmp
+
+            if bool(st.session_state.get("v3_age_1d")) and (not bool(st.session_state.get("v3_today_only"))):
+                tmp = []
+                for r in filtered:
+                    if not bool(r.get("breakout_candle_valid")):
+                        continue
+                    age = r.get("breakout_candle_age")
+                    try:
+                        age_i = int(age) if age is not None else None
+                    except Exception:
+                        age_i = None
+                    if age_i is not None and age_i <= 1:
                         tmp.append(r)
                 filtered = tmp
 
