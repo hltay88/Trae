@@ -559,6 +559,14 @@ if not popup_mode:
 
         st.sidebar.caption("Note: V3 is stricter than V1/V2. A stock can rank high in V1 but show no V3 signal if it lacks a recent power-candle + volume breakout.")
 
+        if "v3_breakout_day_only" not in st.session_state:
+            st.session_state.v3_breakout_day_only = False
+        st.session_state.v3_breakout_day_only = st.sidebar.toggle(
+            "Breakout-day entry only",
+            value=bool(st.session_state.v3_breakout_day_only),
+            help="Shows only ⚡ BREAKOUT signals with run-up within the current V3 Max Run-up setting.",
+        )
+
         with st.sidebar.expander("Advanced V3 Filters", expanded=False):
             v3_window = st.radio(
                 "V3 Breakout Window",
@@ -780,18 +788,34 @@ with tab_stocks:
     if data_rows:
         if breakout_model == "v3":
             sig_filter = str(st.session_state.get("v3_signal_filter", "all") or "all").lower().strip()
+            filtered = data_rows
             if sig_filter in {"late", "failed"}:
-                filtered = []
-                for r in data_rows:
+                tmp = []
+                for r in filtered:
                     is_confirmed = bool(r.get("retest_confirmed"))
                     is_breakout = bool(r.get("breakout_candle_valid"))
                     is_failed = bool(r.get("breakout_candle")) and (r.get("breakout_hold_ok") is False)
                     is_late = bool(r.get("breakout_candle")) and (not is_breakout) and (not is_confirmed) and (not is_failed)
                     if sig_filter == "late" and is_late:
-                        filtered.append(r)
+                        tmp.append(r)
                     elif sig_filter == "failed" and is_failed:
-                        filtered.append(r)
-                data_rows = filtered
+                        tmp.append(r)
+                filtered = tmp
+
+            if bool(st.session_state.get("v3_breakout_day_only")):
+                tmp = []
+                for r in filtered:
+                    if not bool(r.get("breakout_candle_valid")):
+                        continue
+                    if r.get("runup_pct") is None:
+                        continue
+                    max_runup = st.session_state.get("v3_max_runup_pct")
+                    if max_runup is not None and float(r.get("runup_pct")) > float(max_runup):
+                        continue
+                    tmp.append(r)
+                filtered = tmp
+
+            data_rows = filtered
 
         if not data_rows:
             st.warning("No matching signals for the selected Entry Style. Try a different universe or style.")
