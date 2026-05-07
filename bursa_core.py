@@ -1727,6 +1727,29 @@ def get_stock_universe(mode: str = "curated"):
         for k in ["sector-tech", "sector-energy", "sector-banks", "sector-utilities", "sector-infra", "sector-telco"]:
             u, _ = get_sector_large_cap_universe(k)
             parts.extend(u)
+
+        ai_pinned = [
+            "0097.KL",
+            "0128.KL",
+            "0166.KL",
+            "0208.KL",
+            "3867.KL",
+            "4456.KL",
+            "5005.KL",
+            "5286.KL",
+            "5292.KL",
+            "7204.KL",
+            "7471.KL",
+            "9334.KL",
+            "4677.KL",
+            "6742.KL",
+            "4863.KL",
+            "5031.KL",
+            "6947.KL",
+        ]
+        parts.extend([t for t in (_normalize_kl_ticker(x) for x in ai_pinned) if t])
+
+        parts = _filter_to_large_mid(parts)
         parts = sorted({str(x).upper().strip() for x in parts if _normalize_kl_ticker(x)})
         return parts, "focus"
     if m.startswith("sector-"):
