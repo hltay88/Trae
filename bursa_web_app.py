@@ -262,12 +262,12 @@ if 'watchlist' not in st.session_state:
             limit=20,
             model=st.session_state.breakout_model,
             universe_mode=st.session_state.universe_mode,
-            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i"} else None,
             signal_lookback=st.session_state.v3_signal_lookback,
             max_runup_pct=st.session_state.v3_max_runup_pct,
             max_pullback_pct=st.session_state.v3_max_pullback_pct,
             retest_days=st.session_state.v3_retest_days,
-            max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
+            max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3i" else None)),
         )
         if top_breakouts:
             st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
@@ -323,12 +323,12 @@ if not popup_mode:
                 limit=20,
                 model=st.session_state.breakout_model,
                 universe_mode=st.session_state.universe_mode,
-                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i"} else None,
                 signal_lookback=st.session_state.v3_signal_lookback,
                 max_runup_pct=st.session_state.v3_max_runup_pct,
                 max_pullback_pct=st.session_state.v3_max_pullback_pct,
                 retest_days=st.session_state.v3_retest_days,
-                max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
+                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3i" else None)),
             )
             if top_breakouts:
                 st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
@@ -394,7 +394,7 @@ if not popup_mode:
                         limit=20,
                         model=st.session_state.breakout_model,
                         universe_mode=st.session_state.universe_mode,
-                        sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+                        sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i"} else None,
                         signal_lookback=st.session_state.v3_signal_lookback,
                         max_runup_pct=st.session_state.v3_max_runup_pct,
                         max_pullback_pct=st.session_state.v3_max_pullback_pct,
@@ -415,7 +415,7 @@ if not popup_mode:
                     limit=20,
                     model=st.session_state.breakout_model,
                     universe_mode=st.session_state.universe_mode,
-                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i"} else None,
                     signal_lookback=st.session_state.v3_signal_lookback,
                     max_runup_pct=st.session_state.v3_max_runup_pct,
                     max_pullback_pct=st.session_state.v3_max_pullback_pct,
@@ -433,11 +433,14 @@ if not popup_mode:
 
     model_label = st.sidebar.radio(
         "Breakout Model",
-        ["Breakout Candle (V3)", "Stronger (V2)", "Original (V1)"],
-        index=0 if st.session_state.breakout_model == "v3" else (1 if st.session_state.breakout_model == "v2" else 2),
+        ["Breakout Candle (V3)", "Intraday Breakout (V3i)", "Stronger (V2)", "Original (V1)"],
+        index=0 if st.session_state.breakout_model == "v3" else (1 if st.session_state.breakout_model == "v3i" else (2 if st.session_state.breakout_model == "v2" else 3)),
         horizontal=True,
     )
-    selected_model = "v3" if model_label.startswith("Breakout") else ("v2" if model_label.startswith("Stronger") else "v1")
+    if model_label.startswith("Intraday"):
+        selected_model = "v3i"
+    else:
+        selected_model = "v3" if model_label.startswith("Breakout") else ("v2" if model_label.startswith("Stronger") else "v1")
     if selected_model != st.session_state.breakout_model:
         st.session_state.breakout_model = selected_model
         with st.spinner("Refreshing list for selected model..."):
@@ -445,12 +448,12 @@ if not popup_mode:
                 limit=20,
                 model=st.session_state.breakout_model,
                 universe_mode=st.session_state.universe_mode,
-                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i"} else None,
                 signal_lookback=st.session_state.v3_signal_lookback,
                 max_runup_pct=st.session_state.v3_max_runup_pct,
                 max_pullback_pct=st.session_state.v3_max_pullback_pct,
                 retest_days=st.session_state.v3_retest_days,
-                max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
+                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3i" else None)),
             )
             if top_breakouts:
                 st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
@@ -459,8 +462,23 @@ if not popup_mode:
                 st.session_state.watchlist = list(fallback_universe[:20])
         st.rerun()
 
+    if st.session_state.breakout_model == "v3i":
+        import os
+        if "intraday_max_tickers" not in st.session_state:
+            st.session_state.intraday_max_tickers = 50
+        st.session_state.intraday_max_tickers = st.sidebar.slider(
+            "Intraday max tickers",
+            min_value=10,
+            max_value=200,
+            value=int(st.session_state.intraday_max_tickers),
+            step=10,
+            help="Intraday scanning uses iTick 5-minute bars. Keep this smaller to avoid quota limits.",
+        )
+        if not os.environ.get("ITICK_TOKEN"):
+            st.sidebar.error("Missing ITICK_TOKEN. Add it in your environment/secrets to enable intraday scan.")
 
-    if st.session_state.breakout_model == "v3":
+
+    if st.session_state.breakout_model in {"v3", "v3i"}:
         if "v3_entry_style" not in st.session_state:
             st.session_state.v3_entry_style = "Early Entry"
         if "v3_signal_filter" not in st.session_state:
@@ -536,7 +554,10 @@ if not popup_mode:
                     st.session_state.v3_retest_days = 0
 
             with st.spinner("Applying entry style..."):
-                scan_limit = 9999 if st.session_state.v3_signal_filter in {"late", "failed"} else 20
+                if st.session_state.breakout_model == "v3i":
+                    scan_limit = 20
+                else:
+                    scan_limit = 9999 if st.session_state.v3_signal_filter in {"late", "failed"} else 20
                 top_breakouts = get_top_breakouts(
                     limit=scan_limit,
                     model=st.session_state.breakout_model,
@@ -546,7 +567,7 @@ if not popup_mode:
                     max_runup_pct=st.session_state.v3_max_runup_pct,
                     max_pullback_pct=st.session_state.v3_max_pullback_pct,
                     retest_days=st.session_state.v3_retest_days,
-                    max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
+                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3i" else None)),
                 )
                 if st.session_state.v3_signal_filter in {"late", "failed"}:
                     filtered = []
@@ -671,7 +692,7 @@ if not popup_mode:
                         max_runup_pct=st.session_state.v3_max_runup_pct,
                         max_pullback_pct=st.session_state.v3_max_pullback_pct,
                         retest_days=st.session_state.v3_retest_days,
-                        max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
+                        max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3i" else None)),
                     )
                     st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
 
@@ -689,12 +710,12 @@ if not popup_mode:
                     limit=20,
                     model=st.session_state.breakout_model,
                     universe_mode=st.session_state.universe_mode,
-                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i"} else None,
                     signal_lookback=st.session_state.v3_signal_lookback,
                     max_runup_pct=st.session_state.v3_max_runup_pct,
                     max_pullback_pct=st.session_state.v3_max_pullback_pct,
                     retest_days=st.session_state.v3_retest_days,
-                    max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
+                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3i" else None)),
                 )
                 st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
             st.rerun()
@@ -705,12 +726,12 @@ if not popup_mode:
                 limit=20,
                 model=st.session_state.breakout_model,
                 universe_mode=st.session_state.universe_mode,
-                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i"} else None,
                 signal_lookback=st.session_state.v3_signal_lookback,
                 max_runup_pct=st.session_state.v3_max_runup_pct,
                 max_pullback_pct=st.session_state.v3_max_pullback_pct,
                 retest_days=st.session_state.v3_retest_days,
-                max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
+                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3i" else None)),
             )
             if top_breakouts:
                 st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
@@ -767,12 +788,12 @@ if not popup_mode:
             limit=20,
             model=st.session_state.breakout_model,
             universe_mode=st.session_state.universe_mode,
-            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model == "v3" else None,
+            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i"} else None,
             signal_lookback=st.session_state.v3_signal_lookback,
             max_runup_pct=st.session_state.v3_max_runup_pct,
             max_pullback_pct=st.session_state.v3_max_pullback_pct,
             retest_days=st.session_state.v3_retest_days,
-            max_tickers=st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None,
+            max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3i" else None)),
         )
         st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
         st.rerun()
@@ -791,6 +812,28 @@ with tab_stocks:
             benchmark_df, _ = get_stock_data("^KLSE", period="1y")
         except Exception:
             benchmark_df = None
+
+    intraday_map = None
+    if breakout_model == "v3i":
+        try:
+            import os
+            if not os.environ.get("ITICK_TOKEN"):
+                st.error("Intraday model requires ITICK_TOKEN. Add it in your environment/secrets and refresh.")
+                st.stop()
+        except Exception:
+            pass
+        try:
+            import bursa_core as _core
+            codes = []
+            for t in st.session_state.watchlist:
+                if "=F" in str(t):
+                    continue
+                code = str(t).upper().strip().split(".")[0]
+                if code:
+                    codes.append(code)
+            intraday_map = _core._itick_stock_klines(sorted(set(codes))[:50], ktype=2, limit=160, region=None)
+        except Exception:
+            intraday_map = {}
 
     # Use a spinner for the load
     with st.spinner("Fetching latest live prices..."):
@@ -813,6 +856,17 @@ with tab_stocks:
                         max_pullback_pct=st.session_state.v3_max_pullback_pct,
                         retest_days=st.session_state.v3_retest_days,
                     )
+                elif breakout_model == "v3i":
+                    code = str(t).upper().strip().split(".")[0]
+                    intra = (intraday_map or {}).get(code) if intraday_map is not None else None
+                    analysis = analyze_breakout_v3_intraday(
+                        t,
+                        df,
+                        intra,
+                        resolved_name=name,
+                        max_runup_pct=st.session_state.v3_max_runup_pct,
+                        min_intraday_bars=40,
+                    )
                 elif breakout_model == "v2":
                     analysis = analyze_breakout_v2(t, df, name, benchmark_df=benchmark_df, min_rows=min(120, len(df)))
                 else:
@@ -821,10 +875,10 @@ with tab_stocks:
                     data_rows.append(analysis)
 
     if data_rows:
-        if breakout_model == "v3" and st.session_state.get("v3_filter_note"):
+        if breakout_model in {"v3", "v3i"} and st.session_state.get("v3_filter_note"):
             st.info(str(st.session_state.get("v3_filter_note")))
 
-        if breakout_model == "v3":
+        if breakout_model in {"v3", "v3i"}:
             sig_filter = str(st.session_state.get("v3_signal_filter", "all") or "all").lower().strip()
             original_rows = list(data_rows)
             filtered = data_rows
@@ -896,7 +950,7 @@ with tab_stocks:
             st.stop()
 
         # Top Metrics
-        if breakout_model == "v3":
+        if breakout_model in {"v3", "v3i"}:
             strong_threshold = 8
             neutral_threshold = 5
             total_breakouts = len([r for r in data_rows if bool(r.get("retest_confirmed")) or bool(r.get("breakout_candle_valid"))])

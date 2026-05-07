@@ -80,6 +80,113 @@ TRADINGVIEW_PRICE_OVERLAY_ENABLED = False
 TRADINGVIEW_PRICE_CACHE_SECONDS = 60
 _TV_PRICE_CACHE: dict[str, tuple[float, float]] = {}
 
+ITICK_BASE_URL = os.environ.get("ITICK_BASE_URL") or "https://api.itick.org"
+ITICK_DEFAULT_REGION = os.environ.get("ITICK_REGION") or "MY"
+ITICK_CACHE_SECONDS = 20
+_ITICK_KLINE_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def _itick_get_json(path: str, params: dict) -> dict | None:
+    try:
+        token = os.environ.get("ITICK_TOKEN")
+        if not token:
+            return None
+        url = str(ITICK_BASE_URL).rstrip("/") + str(path)
+        r = requests.get(
+            url,
+            params=params,
+            headers={"accept": "application/json", "token": token, "User-Agent": "Mozilla/5.0"},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            return None
+        j = r.json()
+        if not isinstance(j, dict):
+            return None
+        if int(j.get("code", 0) or 0) != 0:
+            return None
+        return j
+    except Exception:
+        return None
+
+
+def _itick_stock_klines(codes: list[str], ktype: int = 2, limit: int = 120, region: str | None = None) -> dict[str, pd.DataFrame]:
+    try:
+        region_v = (region or ITICK_DEFAULT_REGION or "MY").strip().upper()
+        norm_codes = []
+        for c in codes or []:
+            x = str(c or "").strip().upper()
+            if x.endswith(".KL"):
+                x = x[:-3]
+            if x:
+                norm_codes.append(x)
+        norm_codes = sorted(set(norm_codes))
+        if not norm_codes:
+            return {}
+        limit_i = int(limit) if limit is not None else 120
+        if limit_i < 10:
+            limit_i = 10
+        if limit_i > 500:
+            limit_i = 500
+        ktype_i = int(ktype) if ktype is not None else 2
+        if ktype_i not in {1, 2, 3, 4, 5, 8}:
+            ktype_i = 2
+
+        cache_key = f"{region_v}|{ktype_i}|{limit_i}|{','.join(norm_codes)}"
+        now = time.time()
+        hit = _ITICK_KLINE_CACHE.get(cache_key)
+        if hit and (now - float(hit[0])) <= float(ITICK_CACHE_SECONDS):
+            return hit[1]
+
+        params = {"region": region_v, "codes": ",".join(norm_codes), "kType": str(ktype_i), "limit": str(limit_i)}
+        j = _itick_get_json("/stock/klines", params)
+        if not j:
+            return {}
+        data = j.get("data")
+        if not isinstance(data, dict):
+            return {}
+
+        out: dict[str, pd.DataFrame] = {}
+        for code, rows in data.items():
+            if not isinstance(rows, list) or not rows:
+                continue
+            recs = []
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                t = r.get("t")
+                if t is None:
+                    continue
+                try:
+                    ts = pd.to_datetime(int(t), unit="ms", utc=True).tz_convert("Asia/Kuala_Lumpur")
+                except Exception:
+                    continue
+                recs.append(
+                    {
+                        "Date": ts,
+                        "Open": r.get("o"),
+                        "High": r.get("h"),
+                        "Low": r.get("l"),
+                        "Close": r.get("c"),
+                        "Volume": r.get("v"),
+                    }
+                )
+            if not recs:
+                continue
+            df = pd.DataFrame(recs).set_index("Date").sort_index()
+            for c in ["Open", "High", "Low", "Close", "Volume"]:
+                if c in df.columns:
+                    df[c] = pd.to_numeric(df[c], errors="coerce")
+            df = df.dropna(subset=["Close"])
+            if df.empty:
+                continue
+            out[str(code).upper().strip()] = df
+
+        _ITICK_KLINE_CACHE[cache_key] = (now, out)
+        return out
+    except Exception:
+        return {}
+
 
 def _tradingview_last_price_cached_myr(symbol_path: str) -> float | None:
     try:
@@ -1183,6 +1290,126 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
         "model": "v3",
     }
 
+
+def analyze_breakout_v3_intraday(ticker: str, daily_df: pd.DataFrame, intraday_df: pd.DataFrame, resolved_name: str | None = None, max_runup_pct: float | None = 5.0, min_intraday_bars: int = 40):
+    if daily_df is None or daily_df.empty or intraday_df is None or intraday_df.empty:
+        return None
+
+    try:
+        if len(intraday_df) < int(min_intraday_bars):
+            return None
+    except Exception:
+        return None
+
+    ticker = str(ticker or "").upper().strip()
+    df_d = daily_df.copy()
+    df_i = intraday_df.copy()
+    for c in ["Open", "High", "Low", "Close", "Volume"]:
+        if c in df_d.columns:
+            df_d[c] = pd.to_numeric(df_d[c], errors="coerce")
+        if c in df_i.columns:
+            df_i[c] = pd.to_numeric(df_i[c], errors="coerce")
+    df_d = df_d.dropna(subset=["Close"]).copy()
+    df_i = df_i.dropna(subset=["Close"]).copy()
+    if df_d.empty or df_i.empty:
+        return None
+
+    breakout_lookback = 55
+    if len(df_d) < breakout_lookback + 5:
+        return None
+    try:
+        breakout_level = float(df_d["Close"].iloc[-breakout_lookback:-1].max())
+        if not (breakout_level > 0.0):
+            return None
+    except Exception:
+        return None
+
+    try:
+        last = df_i.iloc[-1]
+        o = float(last["Open"])
+        h = float(last["High"])
+        l = float(last["Low"])
+        c = float(last["Close"])
+        v = float(last["Volume"]) if "Volume" in last else 0.0
+        ts = df_i.index[-1]
+    except Exception:
+        return None
+
+    if not (c > 0.0):
+        return None
+
+    intraday_breakout = bool(c > breakout_level)
+    if not intraday_breakout:
+        return None
+
+    power_candle = False
+    try:
+        if h > l:
+            close_pos = (c - l) / (h - l)
+            body_pct = abs(c - o) / (h - l)
+            if c > o and close_pos >= 0.7 and body_pct >= 0.55:
+                power_candle = True
+    except Exception:
+        power_candle = False
+
+    volume_spike = False
+    try:
+        vols = pd.to_numeric(df_i["Volume"], errors="coerce")
+        avg20_prev = float(vols.rolling(window=20).mean().shift(1).iloc[-1])
+        if avg20_prev > 0 and v >= avg20_prev * 1.8:
+            volume_spike = True
+    except Exception:
+        volume_spike = False
+
+    runup_pct = ((c / breakout_level) - 1.0) * 100.0
+    max_run = None
+    try:
+        if max_runup_pct is not None and str(max_runup_pct).strip() != "":
+            max_run = float(max_runup_pct)
+    except Exception:
+        max_run = None
+
+    valid = bool(power_candle and volume_spike and (max_run is None or runup_pct <= max_run))
+    if not valid:
+        return None
+
+    code, name, sector, analysis, catalyst = _resolve_insight_v3(ticker, resolved_name)
+    score = 0
+    score_max = 7
+    score += 2 if power_candle else 0
+    score += 2 if volume_spike else 0
+    score += 1
+    score += 1 if max_run is None or runup_pct <= max_run else 0
+    score += 1
+
+    return {
+        "ticker": ticker,
+        "name": name,
+        "sector": sector,
+        "price": float(c),
+        "rsi": 50.0,
+        "score": int(score),
+        "score_max": int(score_max),
+        "breakout_55": True,
+        "breakout_candle": True,
+        "breakout_candle_valid": True,
+        "breakout_hold_ok": True,
+        "runup_pct": float(runup_pct),
+        "max_runup_pct": None if max_run is None else float(max_run),
+        "max_pullback_pct": None,
+        "retest_days": 0,
+        "retest_confirmed": False,
+        "breakout_candle_date": pd.Timestamp(ts).date().isoformat(),
+        "breakout_candle_age": 0,
+        "breakout_level": float(breakout_level),
+        "power_candle": bool(power_candle),
+        "volume_spike": bool(volume_spike),
+        "liquidity_ok": True,
+        "analysis": analysis,
+        "catalyst": catalyst,
+        "model": "v3i",
+    }
+
 # --- KLCI COMPONENTS (Top 30 Stocks) ---
 KLCI_COMPONENTS = [
     "1155.KL", "1295.KL", "1023.KL", "5347.KL", "5183.KL", 
@@ -2089,7 +2316,8 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
     """
     all_results = []
     benchmark_df = None
-    if str(model).lower() == "v2":
+    m = str(model).lower()
+    if m == "v2":
         try:
             bench = yf.Ticker("^KLSE")
             benchmark_df = bench.history(period="1y")
@@ -2100,6 +2328,9 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
     
     tickers = universe if universe is not None else get_stock_universe(universe_mode)[0]
     try:
+        if m == "v3i" and max_tickers is None:
+            max_tickers = 50
+
         if max_tickers is not None:
             n = int(max_tickers)
             if n > 0:
@@ -2107,8 +2338,80 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
     except Exception:
         pass
     allow = None
-    if str(model).lower() == "v3" and sector_allowlist:
+    if m in {"v3", "v3i"} and sector_allowlist:
         allow = {str(x).strip().lower() for x in sector_allowlist if str(x).strip()}
+
+    if m == "v3i":
+        token = os.environ.get("ITICK_TOKEN")
+        if not token:
+            return []
+
+        def _chunks(seq, size: int):
+            out = []
+            buf = []
+            for x in seq:
+                buf.append(x)
+                if len(buf) >= size:
+                    out.append(buf)
+                    buf = []
+            if buf:
+                out.append(buf)
+            return out
+
+        for batch in _chunks(list(tickers), 10):
+            daily_map: dict[str, tuple[pd.DataFrame, str]] = {}
+            codes = []
+            for ticker in batch:
+                if allow:
+                    t = str(ticker).upper().strip()
+                    code = t.split(".")[0]
+                    insight = MARKET_INSIGHTS.get(t)
+                    if not insight:
+                        for _, v in MARKET_INSIGHTS.items():
+                            if v.get("code") == code:
+                                insight = v
+                                break
+                    sector = insight.get("sector") if insight else None
+                    if sector and str(sector).strip().lower() not in allow:
+                        continue
+
+                df, resolved_name = get_stock_data(ticker, period="1y")
+                if df is None or df.empty:
+                    continue
+                t = str(ticker).upper().strip()
+                code = t.split(".")[0]
+                daily_map[code] = (df, resolved_name)
+                codes.append(code)
+
+            if not codes:
+                continue
+
+            intramap = _itick_stock_klines(codes, ktype=2, limit=160, region=None)
+            for code, (dfd, resolved_name) in daily_map.items():
+                intra = intramap.get(code)
+                if intra is None or intra.empty:
+                    continue
+                ticker_full = f"{code}.KL" if (code.isdigit() and len(code) == 4) else code
+                analysis = analyze_breakout_v3_intraday(
+                    ticker_full,
+                    dfd,
+                    intra,
+                    resolved_name=resolved_name,
+                    max_runup_pct=max_runup_pct,
+                    min_intraday_bars=40,
+                )
+                if analysis:
+                    all_results.append(analysis)
+
+        all_results.sort(
+            key=lambda x: (
+                bool(x.get("breakout_candle_valid")),
+                int(x.get("score", 0)),
+                -float(x.get("runup_pct", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
+        return all_results[:limit]
     # Using individual fetching for better error handling in this environment
     for ticker in tickers:
         if allow:
@@ -2155,7 +2458,6 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
         except Exception:
             continue
 
-        m = str(model).lower()
         if m == "v3":
             analysis = analyze_breakout_v3(ticker, df, resolved_name, benchmark_df=benchmark_df, min_rows=120, signal_lookback=signal_lookback, max_runup_pct=max_runup_pct, max_pullback_pct=max_pullback_pct, retest_days=retest_days)
         elif m == "v2":
