@@ -1133,10 +1133,12 @@ with tab_stocks:
 
     # Use a spinner for the load
     with st.spinner("Fetching latest live prices..."):
+        manual_set = set(_uniq_tickers(st.session_state.get("manual_watchlist") or []))
         for t in st.session_state.watchlist:
             # Skip futures in the stock tab if they were added manually
             if "=F" in t: continue
             fetch_attempted += 1
+            is_manual = str(t).upper().strip() in manual_set
             df, name = get_stock_data(t, period="1y")
             if df is not None and not df.empty:
                 fetch_success += 1
@@ -1172,7 +1174,7 @@ with tab_stocks:
 
                 if analysis:
                     data_rows.append(analysis)
-                elif breakout_model in {"v3", "v3tv"} and bool(st.session_state.get("v3_show_watchlist_all")):
+                elif breakout_model in {"v3", "v3tv"} and (is_manual or bool(st.session_state.get("v3_show_watchlist_all"))):
                     try:
                         from ta.momentum import RSIIndicator
                         rsi_v = RSIIndicator(df["Close"], window=14).rsi().iloc[-1]
@@ -1245,7 +1247,7 @@ with tab_stocks:
                         "data_ok": True,
                         "model": "v3tv" if breakout_model == "v3tv" else "v3",
                     })
-            elif breakout_model in {"v3", "v3tv"} and bool(st.session_state.get("v3_show_watchlist_all")):
+            elif breakout_model in {"v3", "v3tv"} and (is_manual or bool(st.session_state.get("v3_show_watchlist_all"))):
                 try:
                     _, resolved_name, sector, insight, catalyst = _core._resolve_insight_v3(str(t), None)
                 except Exception:
