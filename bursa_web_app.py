@@ -143,6 +143,14 @@ def _render_chart(symbol: str):
         st.warning(f"5-year data unavailable for {symbol}. Trying 1-year data...")
         df_chart, name_chart = get_stock_data(symbol, period="1y")
 
+    try:
+        if hasattr(_core, "_resolve_insight_v3"):
+            _, nm, *_ = _core._resolve_insight_v3(symbol, name_chart)
+            if nm:
+                name_chart = nm
+    except Exception:
+        pass
+
     df_chart = _clean_ohlcv(df_chart)
 
     if df_chart is None or df_chart.empty:
@@ -261,8 +269,21 @@ a:hover { text-decoration: underline; }
 
 # Popup/new-tab chart view (opened from table clicks)
 if chart_symbol:
+    display_name = None
+    try:
+        if hasattr(_core, "_resolve_insight_v3"):
+            _, nm, *_ = _core._resolve_insight_v3(chart_symbol, None)
+            if nm:
+                display_name = str(nm).strip()
+    except Exception:
+        display_name = None
+
+    if display_name and display_name.upper() not in {str(chart_symbol).upper().strip(), str(chart_symbol).split(".")[0].upper().strip()}:
+        header = f"### {display_name} ({chart_symbol}) — Chart"
+    else:
+        header = f"### {chart_symbol} — Chart"
     st.markdown(
-        f"### {chart_symbol} — Chart",
+        header,
     )
     st.caption("This is an in-app chart view. Use the link below to return to the dashboard.")
     with st.spinner(f"Loading chart for {chart_symbol}..."):
