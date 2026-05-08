@@ -14,6 +14,9 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 import time
+import os
+import hashlib
+import hmac
 from urllib.parse import quote
 import streamlit.components.v1 as components
 import bursa_core as _core
@@ -34,6 +37,74 @@ get_futures_breakouts = _core.get_futures_breakouts
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Bursa Breakout Analyzer", layout="wide", page_icon="📈")
+
+def _get_secret_value(key: str) -> str | None:
+    try:
+        v = None
+        try:
+            v = st.secrets.get(key)
+        except Exception:
+            try:
+                v = st.secrets[key]
+            except Exception:
+                v = None
+        if v is None:
+            v = os.environ.get(key)
+        if v is None:
+            return None
+        s = str(v)
+        return s
+    except Exception:
+        return None
+
+
+def _sha256_hex(s: str) -> str:
+    return hashlib.sha256(str(s).encode("utf-8")).hexdigest()
+
+
+def _require_login(popup_mode: bool) -> None:
+    expected_user = _get_secret_value("APP_USERNAME")
+    expected_pw = _get_secret_value("APP_PASSWORD")
+    expected_pw_sha = _get_secret_value("APP_PASSWORD_SHA256")
+
+    if not expected_user or (not expected_pw and not expected_pw_sha):
+        st.error("Login is enabled but credentials are not configured. Set APP_USERNAME and either APP_PASSWORD or APP_PASSWORD_SHA256 in Streamlit Secrets / environment variables.")
+        st.stop()
+
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if st.session_state.authenticated:
+        if not popup_mode:
+            try:
+                with st.sidebar:
+                    if st.button("Logout", use_container_width=True):
+                        st.session_state.authenticated = False
+                        st.session_state.auth_user = None
+                        st.rerun()
+            except Exception:
+                pass
+        return
+
+    st.title("🔐 Login")
+    st.caption("Enter your username and password to continue.")
+    with st.form("login_form", clear_on_submit=False):
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login")
+    if submitted:
+        ok_user = hmac.compare_digest(str(u or ""), str(expected_user or ""))
+        if expected_pw_sha:
+            ok_pw = hmac.compare_digest(_sha256_hex(p or ""), str(expected_pw_sha or "").strip().lower())
+        else:
+            ok_pw = hmac.compare_digest(str(p or ""), str(expected_pw or ""))
+        if ok_user and ok_pw:
+            st.session_state.authenticated = True
+            st.session_state.auth_user = str(u or "").strip()
+            st.rerun()
+        else:
+            st.error("Invalid username or password.")
+    st.stop()
 
 # --- QUERY PARAMS (Popup Chart Mode) ---
 def _get_query_param(name: str):
@@ -229,6 +300,8 @@ def _render_chart(symbol: str):
 
 chart_symbol = _get_query_param("chart")
 popup_mode = _get_query_param("popup")
+
+_require_login(bool(popup_mode))
 
 if "breakout_model" not in st.session_state:
     st.session_state.breakout_model = "v2"
