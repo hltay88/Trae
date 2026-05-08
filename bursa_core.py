@@ -84,6 +84,8 @@ ITICK_BASE_URL = os.environ.get("ITICK_BASE_URL") or "https://api.itick.org"
 ITICK_DEFAULT_REGION = os.environ.get("ITICK_REGION") or "MY"
 ITICK_CACHE_SECONDS = 20
 _ITICK_KLINE_CACHE: dict[str, tuple[float, dict]] = {}
+_ITICK_INFO_CACHE: dict[str, tuple[float, str]] = {}
+ITICK_INFO_CACHE_SECONDS = 24 * 3600
 
 
 def _itick_get_json(path: str, params: dict) -> dict | None:
@@ -186,6 +188,41 @@ def _itick_stock_klines(codes: list[str], ktype: int = 2, limit: int = 120, regi
         return out
     except Exception:
         return {}
+
+
+def _itick_stock_name(code: str, region: str | None = None) -> str | None:
+    try:
+        token = os.environ.get("ITICK_TOKEN")
+        if not token:
+            return None
+        c = str(code or "").strip().upper()
+        if c.endswith(".KL"):
+            c = c[:-3]
+        if not c:
+            return None
+        region_v = (region or ITICK_DEFAULT_REGION or "MY").strip().upper()
+
+        now = time.time()
+        hit = _ITICK_INFO_CACHE.get(f"{region_v}:{c}")
+        if hit and (now - float(hit[0])) <= float(ITICK_INFO_CACHE_SECONDS):
+            return hit[1]
+
+        j = _itick_get_json("/stock/info", {"type": "stock", "region": region_v, "code": c})
+        if not j:
+            return None
+        data = j.get("data")
+        if not isinstance(data, dict):
+            return None
+        name = data.get("n")
+        if not name:
+            return None
+        name_s = str(name).strip()
+        if not name_s:
+            return None
+        _ITICK_INFO_CACHE[f"{region_v}:{c}"] = (now, name_s)
+        return name_s
+    except Exception:
+        return None
 
 
 def _tradingview_last_price_cached_myr(symbol_path: str) -> float | None:
@@ -367,6 +404,13 @@ def get_stock_data(ticker, period="1y"):
             auto_name = _auto_universe_name(ticker)
             if auto_name:
                 return str(auto_name)
+            try:
+                code2 = str(ticker).split(".")[0]
+                it_name = _itick_stock_name(code2)
+                if it_name:
+                    return str(it_name)
+            except Exception:
+                pass
             return n
         except Exception:
             return str(base_name or ticker)
@@ -550,7 +594,7 @@ def get_stock_data(ticker, period="1y"):
 
                 name = base_name
                 # Only try yfinance info if we don't have a good name yet
-                if name == ticker or ".KL" in str(name):
+                if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
                     try:
                         auto_name = _auto_universe_name(symbol) or _auto_universe_name(ticker)
                         if auto_name:
@@ -562,6 +606,13 @@ def get_stock_data(ticker, period="1y"):
                         yf_info = stock.info
                         name = yf_info.get('shortName') or yf_info.get('longName') or name
                     except:
+                        pass
+                if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
+                    try:
+                        it_name = _itick_stock_name(ticker)
+                        if it_name:
+                            name = it_name
+                    except Exception:
                         pass
                 try:
                     _write_price_cache(ticker, df)
@@ -592,6 +643,13 @@ def get_stock_data(ticker, period="1y"):
                         name = auto_name
                 except Exception:
                     pass
+                if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
+                    try:
+                        it_name = _itick_stock_name(ticker)
+                        if it_name:
+                            name = it_name
+                    except Exception:
+                        pass
                 try:
                     _write_price_cache(ticker, df2)
                 except Exception:
@@ -621,6 +679,13 @@ def get_stock_data(ticker, period="1y"):
                         name = auto_name
                 except Exception:
                     pass
+                if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
+                    try:
+                        it_name = _itick_stock_name(ticker)
+                        if it_name:
+                            name = it_name
+                    except Exception:
+                        pass
                 try:
                     _write_price_cache(ticker, df3)
                 except Exception:
@@ -674,9 +739,24 @@ def _resolve_insight(ticker: str, resolved_name: str | None):
         catalyst = insight["catalyst"]
     else:
         name = resolved_name or code
+        try:
+            if str(name).strip().upper() in {t, code, f"{code}.KL"} or ".KL" in str(name).upper():
+                auto_name = _auto_universe_name(t) or _auto_universe_name(f"{code}.KL")
+                if auto_name:
+                    name = auto_name
+        except Exception:
+            pass
 
     if name == t or name == code or ".KL" in str(name):
         name = str(name).replace(".KL", "").strip()
+
+    if str(name).strip() == code:
+        try:
+            it_name = _itick_stock_name(code)
+            if it_name:
+                name = it_name
+        except Exception:
+            pass
 
     return code, name, analysis, catalyst
 
@@ -703,9 +783,24 @@ def _resolve_insight_v3(ticker: str, resolved_name: str | None):
         sector = str(insight.get("sector") or sector).strip() or sector
     else:
         name = resolved_name or code
+        try:
+            if str(name).strip().upper() in {t, code, f"{code}.KL"} or ".KL" in str(name).upper():
+                auto_name = _auto_universe_name(t) or _auto_universe_name(f"{code}.KL")
+                if auto_name:
+                    name = auto_name
+        except Exception:
+            pass
 
     if name == t or name == code or ".KL" in str(name):
         name = str(name).replace(".KL", "").strip()
+
+    if str(name).strip() == code:
+        try:
+            it_name = _itick_stock_name(code)
+            if it_name:
+                name = it_name
+        except Exception:
+            pass
 
     return code, name, sector, analysis, catalyst
 
