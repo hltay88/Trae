@@ -476,17 +476,17 @@ if not popup_mode:
             step=10,
             help="Intraday scanning uses iTick 5-minute bars. Keep this smaller to avoid quota limits.",
         )
+        if "ITICK_TOKEN" not in st.session_state:
+            st.session_state.ITICK_TOKEN = ""
+        st.sidebar.text_input(
+            "ITICK_TOKEN",
+            key="ITICK_TOKEN",
+            type="password",
+            help="Paste your iTick API Key here. For permanent use, set ITICK_TOKEN in Streamlit Secrets / environment variables.",
+        )
         try:
             import bursa_core as _core
             if not _core.itick_enabled():
-                if "itick_token" not in st.session_state:
-                    st.session_state.itick_token = ""
-                st.sidebar.text_input(
-                    "ITICK_TOKEN",
-                    key="itick_token",
-                    type="password",
-                    help="Paste your iTick token here (stored only in this session), or set it in Streamlit secrets/environment for permanent use.",
-                )
                 if not _core.itick_enabled():
                     st.sidebar.error("Missing ITICK_TOKEN. Add it in your environment/secrets (or paste above) to enable intraday scan.")
         except Exception:
