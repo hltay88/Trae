@@ -1301,7 +1301,7 @@ with tab_stocks:
         if breakout_model in {"v3", "v3tv"}:
             sig_filter = str(st.session_state.get("v3_signal_filter", "all") or "all").lower().strip()
             original_rows = list(data_rows)
-            watch_rows = [r for r in data_rows if bool(r.get("watch_only"))] if bool(st.session_state.get("v3_show_watchlist_all")) else []
+            watch_rows = [r for r in data_rows if bool(r.get("watch_only"))]
             filtered = [r for r in data_rows if not bool(r.get("watch_only"))]
             if sig_filter in {"late", "failed"}:
                 tmp = []
