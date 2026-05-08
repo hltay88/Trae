@@ -100,6 +100,23 @@ def _get_itick_token() -> str | None:
 
     try:
         import streamlit as st  # type: ignore
+        try:
+            ss = getattr(st, "session_state", None)
+            if ss is not None:
+                for k in ["ITICK_TOKEN", "itick_token", "itick_token_input"]:
+                    try:
+                        v = ss.get(k)
+                    except Exception:
+                        try:
+                            v = ss[k]
+                        except Exception:
+                            v = None
+                    if v:
+                        v_s = str(v).strip()
+                        if v_s:
+                            return v_s
+        except Exception:
+            pass
         secrets = getattr(st, "secrets", None)
         if secrets is None:
             return None

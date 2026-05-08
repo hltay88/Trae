@@ -479,7 +479,16 @@ if not popup_mode:
         try:
             import bursa_core as _core
             if not _core.itick_enabled():
-                st.sidebar.error("Missing ITICK_TOKEN. Add it in your environment/secrets to enable intraday scan.")
+                if "itick_token" not in st.session_state:
+                    st.session_state.itick_token = ""
+                st.sidebar.text_input(
+                    "ITICK_TOKEN",
+                    key="itick_token",
+                    type="password",
+                    help="Paste your iTick token here (stored only in this session), or set it in Streamlit secrets/environment for permanent use.",
+                )
+                if not _core.itick_enabled():
+                    st.sidebar.error("Missing ITICK_TOKEN. Add it in your environment/secrets (or paste above) to enable intraday scan.")
         except Exception:
             st.sidebar.error("Missing ITICK_TOKEN. Add it in your environment/secrets to enable intraday scan.")
 
