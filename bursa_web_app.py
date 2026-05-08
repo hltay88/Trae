@@ -829,6 +829,8 @@ with tab_stocks:
             benchmark_df = None
 
     intraday_map = None
+    intraday_attempted = 0
+    intraday_success = 0
     if breakout_model == "v3i":
         try:
             import bursa_core as _core
@@ -846,9 +848,18 @@ with tab_stocks:
                 code = str(t).upper().strip().split(".")[0]
                 if code:
                     codes.append(code)
-            intraday_map = _core._itick_stock_klines(sorted(set(codes))[:50], ktype=2, limit=160, region=None)
+            codes_u = sorted(set(codes))
+            intraday_attempted = len(codes_u)
+            intraday_map = _core._itick_stock_klines(codes_u[: int(st.session_state.get("intraday_max_tickers") or 50)], ktype=2, limit=160, region=None)
+            intraday_success = sum(1 for _, dfi in (intraday_map or {}).items() if dfi is not None and not dfi.empty)
         except Exception:
             intraday_map = {}
+            intraday_success = 0
+        if intraday_attempted > 0 and intraday_success == 0:
+            st.error("iTick returned no intraday bars for this watchlist. Check your iTick plan supports MY stocks, or try a smaller universe (KLCI/FBM100) and retry.")
+            st.stop()
+        if intraday_attempted > 0:
+            st.caption(f"Intraday fetch: {intraday_success}/{intraday_attempted} tickers returned intraday bars.")
 
     # Use a spinner for the load
     with st.spinner("Fetching latest live prices..."):
@@ -1030,7 +1041,10 @@ with tab_stocks:
         st.caption("Tip: click the stock name to open its chart in a new window/tab.")
         st.markdown(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
     else:
-        st.warning("No data found. Please click 'Refresh Market Discovery' or add valid tickers.")
+        if breakout_model == "v3i":
+            st.warning("No intraday breakout signals found for the current watchlist and filters.")
+        else:
+            st.warning("No data found. Please click 'Refresh Market Discovery' or add valid tickers.")
         st.caption(f"Fetch summary: {fetch_success}/{fetch_attempted} tickers returned data.")
         if fetch_attempted == 0:
             st.caption("Watchlist is empty. Try switching universe, clicking 'Refresh Market Discovery', or 'Reset to Top 20'.")

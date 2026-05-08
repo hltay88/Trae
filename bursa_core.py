@@ -1445,7 +1445,7 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
     }
 
 
-def analyze_breakout_v3_intraday(ticker: str, daily_df: pd.DataFrame, intraday_df: pd.DataFrame, resolved_name: str | None = None, max_runup_pct: float | None = 5.0, min_intraday_bars: int = 40):
+def analyze_breakout_v3_intraday(ticker: str, daily_df: pd.DataFrame, intraday_df: pd.DataFrame, resolved_name: str | None = None, max_runup_pct: float | None = 5.0, min_intraday_bars: int = 40, lookback_bars: int | None = 60):
     if daily_df is None or daily_df.empty or intraday_df is None or intraday_df.empty:
         return None
 
@@ -1478,44 +1478,6 @@ def analyze_breakout_v3_intraday(ticker: str, daily_df: pd.DataFrame, intraday_d
     except Exception:
         return None
 
-    try:
-        last = df_i.iloc[-1]
-        o = float(last["Open"])
-        h = float(last["High"])
-        l = float(last["Low"])
-        c = float(last["Close"])
-        v = float(last["Volume"]) if "Volume" in last else 0.0
-        ts = df_i.index[-1]
-    except Exception:
-        return None
-
-    if not (c > 0.0):
-        return None
-
-    intraday_breakout = bool(c > breakout_level)
-    if not intraday_breakout:
-        return None
-
-    power_candle = False
-    try:
-        if h > l:
-            close_pos = (c - l) / (h - l)
-            body_pct = abs(c - o) / (h - l)
-            if c > o and close_pos >= 0.7 and body_pct >= 0.55:
-                power_candle = True
-    except Exception:
-        power_candle = False
-
-    volume_spike = False
-    try:
-        vols = pd.to_numeric(df_i["Volume"], errors="coerce")
-        avg20_prev = float(vols.rolling(window=20).mean().shift(1).iloc[-1])
-        if avg20_prev > 0 and v >= avg20_prev * 1.8:
-            volume_spike = True
-    except Exception:
-        volume_spike = False
-
-    runup_pct = ((c / breakout_level) - 1.0) * 100.0
     max_run = None
     try:
         if max_runup_pct is not None and str(max_runup_pct).strip() != "":
@@ -1523,9 +1485,103 @@ def analyze_breakout_v3_intraday(ticker: str, daily_df: pd.DataFrame, intraday_d
     except Exception:
         max_run = None
 
-    valid = bool(power_candle and volume_spike and (max_run is None or runup_pct <= max_run))
-    if not valid:
+    try:
+        n = int(lookback_bars) if lookback_bars is not None else 60
+        if n < 10:
+            n = 10
+        if n > len(df_i):
+            n = len(df_i)
+        df_scan = df_i.tail(n).copy()
+    except Exception:
         return None
+
+    vol_avg_prev = None
+    try:
+        if "Volume" in df_scan.columns:
+            vols = pd.to_numeric(df_scan["Volume"], errors="coerce")
+            vol_avg_prev = vols.rolling(window=20).mean().shift(1)
+    except Exception:
+        vol_avg_prev = None
+
+    best = None
+    best_score = None
+    for ts, row in df_scan.iterrows():
+        try:
+            o = float(row["Open"])
+            h = float(row["High"])
+            l = float(row["Low"])
+            c = float(row["Close"])
+        except Exception:
+            continue
+        if not (c > 0.0):
+            continue
+        if not (c > breakout_level):
+            continue
+
+        runup_pct = ((c / breakout_level) - 1.0) * 100.0
+        if max_run is not None:
+            try:
+                if float(runup_pct) > float(max_run):
+                    continue
+            except Exception:
+                pass
+
+        power_candle = False
+        try:
+            if h > l:
+                close_pos = (c - l) / (h - l)
+                body_pct = abs(c - o) / (h - l)
+                if c > o and close_pos >= 0.6 and body_pct >= 0.4:
+                    power_candle = True
+        except Exception:
+            power_candle = False
+
+        volume_spike = False
+        v = 0.0
+        try:
+            if "Volume" in row and row.get("Volume") is not None:
+                v = float(row.get("Volume") or 0.0)
+        except Exception:
+            v = 0.0
+        try:
+            if vol_avg_prev is not None:
+                avg20_prev = vol_avg_prev.loc[ts]
+                if avg20_prev is not None and not pd.isna(avg20_prev):
+                    a = float(avg20_prev)
+                    if a > 0.0 and v >= a * 1.5:
+                        volume_spike = True
+        except Exception:
+            volume_spike = False
+
+        if not (power_candle or volume_spike):
+            continue
+
+        score = 0.0
+        score += 2.0 if power_candle else 0.0
+        score += 2.0 if volume_spike else 0.0
+        try:
+            score += max(0.0, 2.0 - float(runup_pct) / 2.5)
+        except Exception:
+            pass
+
+        if best_score is None or score > float(best_score):
+            best_score = float(score)
+            best = {
+                "ts": ts,
+                "close": float(c),
+                "runup_pct": float(runup_pct),
+                "power_candle": bool(power_candle),
+                "volume_spike": bool(volume_spike),
+            }
+
+    if not best:
+        return None
+
+    c = float(best["close"])
+    ts = best["ts"]
+    runup_pct = float(best["runup_pct"])
+    power_candle = bool(best["power_candle"])
+    volume_spike = bool(best["volume_spike"])
 
     code, name, sector, analysis, catalyst = _resolve_insight_v3(ticker, resolved_name)
     score = 0
