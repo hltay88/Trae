@@ -139,71 +139,6 @@ def _strip_auth_from_url() -> None:
         pass
 
 
-def _set_auth_cookie(token: str, max_age_seconds: int = 12 * 3600) -> None:
-    try:
-        t = str(token or "").strip()
-        if not t:
-            return
-        max_age = int(max_age_seconds)
-        components.html(
-            f"""
-<script>
-(function () {{
-  try {{
-    document.cookie = "bursa_auth=" + encodeURIComponent("{t}") + "; Max-Age={max_age}; Path=/; SameSite=Lax";
-  }} catch (e) {{}}
-}})();
-</script>
-""",
-            height=0,
-        )
-    except Exception:
-        pass
-
-
-def _clear_auth_cookie() -> None:
-    try:
-        components.html(
-            """
-<script>
-(function () {
-  try {
-    document.cookie = "bursa_auth=; Max-Age=0; Path=/; SameSite=Lax";
-  } catch (e) {}
-})();
-</script>
-""",
-            height=0,
-        )
-    except Exception:
-        pass
-
-
-def _autologin_redirect_if_cookie_present() -> None:
-    try:
-        components.html(
-            """
-<script>
-(function () {
-  try {
-    const url = new URL(window.location.href);
-    if (url.searchParams.has('auth')) return;
-    const m = document.cookie.match(/(?:^|;\\s*)bursa_auth=([^;]+)/);
-    if (!m || !m[1]) return;
-    const token = decodeURIComponent(m[1]);
-    if (!token) return;
-    url.searchParams.set('auth', token);
-    window.location.replace(url.toString());
-  } catch (e) {}
-})();
-</script>
-""",
-            height=0,
-        )
-    except Exception:
-        pass
-
-
 def _set_query_params(**kwargs) -> None:
     try:
         qp = {}
@@ -248,11 +183,7 @@ def _require_login(popup_mode: bool) -> None:
         if u_from_token:
             st.session_state.authenticated = True
             st.session_state.auth_user = u_from_token
-            _set_auth_cookie(_get_query_param("auth"), max_age_seconds=12 * 3600)
-            _strip_auth_from_url()
-            st.rerun()
-        if _get_query_param("auth"):
-            _clear_auth_cookie()
+            st.session_state.auth_token = str(_get_query_param("auth") or "").strip()
             _strip_auth_from_url()
 
     if st.session_state.authenticated:
@@ -262,7 +193,7 @@ def _require_login(popup_mode: bool) -> None:
                     if st.button("Logout", use_container_width=True):
                         st.session_state.authenticated = False
                         st.session_state.auth_user = None
-                        _clear_auth_cookie()
+                        st.session_state.auth_token = None
                         st.rerun()
             except Exception:
                 pass
@@ -284,7 +215,7 @@ def _require_login(popup_mode: bool) -> None:
             st.session_state.authenticated = True
             st.session_state.auth_user = str(u or "").strip()
             tok = _make_auth_token(st.session_state.auth_user, ttl_seconds=12 * 3600)
-            _set_auth_cookie(tok, max_age_seconds=12 * 3600)
+            st.session_state.auth_token = tok
             st.rerun()
         else:
             st.error("Invalid username or password.")
@@ -485,7 +416,6 @@ def _render_chart(symbol: str):
 chart_symbol = _get_query_param("chart")
 popup_mode = _get_query_param("popup")
 
-_autologin_redirect_if_cookie_present()
 _require_login(bool(popup_mode))
 
 if "breakout_model" not in st.session_state:
@@ -525,7 +455,7 @@ a:hover { text-decoration: underline; }
     unsafe_allow_html=True,
 )
 
-# Chart view
+# Popup/new-tab chart view
 if chart_symbol:
     display_name = None
     try:
@@ -546,9 +476,14 @@ if chart_symbol:
     st.caption("This is an in-app chart view.")
     with st.spinner(f"Loading chart for {chart_symbol}..."):
         _render_chart(chart_symbol)
-    if st.button("Back to Dashboard", use_container_width=True):
-        _clear_query_params()
-        st.rerun()
+    try:
+        tok = st.session_state.get("auth_token")
+    except Exception:
+        tok = None
+    if tok:
+        st.markdown(f"[Back to Dashboard](/?auth={quote(str(tok))})")
+    else:
+        st.markdown("[Back to Dashboard](/)")
     st.stop()
 
 # Initialize session state for watchlist
@@ -729,17 +664,6 @@ if not popup_mode:
             st.rerun()
     if st.session_state.universe_mode == "file":
         st.sidebar.caption("Universe source: bursa_universe.csv in the app folder. Put one 4-digit stock code per line (Main + ACE). Example: 6742 or 6742.KL.")
-
-    st.sidebar.markdown("---")
-    try:
-        wl = [str(x).upper().strip() for x in (st.session_state.get("watchlist") or []) if str(x).strip()]
-    except Exception:
-        wl = []
-    if wl:
-        sel = st.sidebar.selectbox("Open Chart", wl, index=0)
-        if st.sidebar.button("Show Chart", use_container_width=True):
-            _set_query_params(chart=str(sel))
-            st.rerun()
 
     model_label = st.sidebar.radio(
         "Breakout Model",
@@ -1418,8 +1342,17 @@ with tab_stocks:
         
         # Prepare display dataframe
         display_rows = []
+        try:
+            auth_tok = st.session_state.get("auth_token")
+        except Exception:
+            auth_tok = None
         for r in data_rows:
-            linked_name = str(r.get("name") or "")
+            ticker_q = quote(str(r.get("ticker") or ""))
+            if auth_tok:
+                link = f"?chart={ticker_q}&popup=1&auth={quote(str(auth_tok))}"
+            else:
+                link = f"?chart={ticker_q}&popup=1"
+            linked_name = f'<a href="{link}" target="_blank" rel="noopener noreferrer">{r["name"]}</a>'
             score_max = int(r.get("score_max", 5))
             score_val = int(r.get("score", 0))
 
@@ -1475,8 +1408,17 @@ with tab_futures:
     
     if futures_data:
         futures_display = []
+        try:
+            auth_tok = st.session_state.get("auth_token")
+        except Exception:
+            auth_tok = None
         for r in futures_data:
-            linked_name = str(r.get("name") or "")
+            ticker_q = quote(str(r.get("ticker") or ""))
+            if auth_tok:
+                link = f"?chart={ticker_q}&popup=1&auth={quote(str(auth_tok))}"
+            else:
+                link = f"?chart={ticker_q}&popup=1"
+            linked_name = f'<a href="{link}" target="_blank" rel="noopener noreferrer">{r["name"]}</a>'
             futures_display.append({
                 "Future Contract": linked_name,
                 "Ticker": r['ticker'],
