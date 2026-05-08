@@ -88,9 +88,51 @@ _ITICK_INFO_CACHE: dict[str, tuple[float, str]] = {}
 ITICK_INFO_CACHE_SECONDS = 24 * 3600
 
 
+def _get_itick_token() -> str | None:
+    try:
+        token = os.environ.get("ITICK_TOKEN") or os.environ.get("itick_token")
+        if token:
+            token_s = str(token).strip()
+            if token_s:
+                return token_s
+    except Exception:
+        pass
+
+    try:
+        import streamlit as st  # type: ignore
+        secrets = getattr(st, "secrets", None)
+        if secrets is None:
+            return None
+        for k in ["ITICK_TOKEN", "itick_token", "ITICK_API_TOKEN", "itick_api_token"]:
+            try:
+                if k in secrets:
+                    v = secrets[k]
+                else:
+                    v = None
+            except Exception:
+                try:
+                    v = secrets.get(k)
+                except Exception:
+                    v = None
+            if v:
+                v_s = str(v).strip()
+                if v_s:
+                    return v_s
+        return None
+    except Exception:
+        return None
+
+
+def itick_enabled() -> bool:
+    try:
+        return bool(_get_itick_token())
+    except Exception:
+        return False
+
+
 def _itick_get_json(path: str, params: dict) -> dict | None:
     try:
-        token = os.environ.get("ITICK_TOKEN")
+        token = _get_itick_token()
         if not token:
             return None
         url = str(ITICK_BASE_URL).rstrip("/") + str(path)
@@ -192,7 +234,7 @@ def _itick_stock_klines(codes: list[str], ktype: int = 2, limit: int = 120, regi
 
 def _itick_stock_name(code: str, region: str | None = None) -> str | None:
     try:
-        token = os.environ.get("ITICK_TOKEN")
+        token = _get_itick_token()
         if not token:
             return None
         c = str(code or "").strip().upper()
@@ -2458,7 +2500,7 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
         allow = {str(x).strip().lower() for x in sector_allowlist if str(x).strip()}
 
     if m == "v3i":
-        token = os.environ.get("ITICK_TOKEN")
+        token = _get_itick_token()
         if not token:
             return []
 

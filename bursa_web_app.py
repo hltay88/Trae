@@ -466,7 +466,6 @@ if not popup_mode:
         st.rerun()
 
     if st.session_state.breakout_model == "v3i":
-        import os
         if "intraday_max_tickers" not in st.session_state:
             st.session_state.intraday_max_tickers = 50
         st.session_state.intraday_max_tickers = st.sidebar.slider(
@@ -477,7 +476,11 @@ if not popup_mode:
             step=10,
             help="Intraday scanning uses iTick 5-minute bars. Keep this smaller to avoid quota limits.",
         )
-        if not os.environ.get("ITICK_TOKEN"):
+        try:
+            import bursa_core as _core
+            if not _core.itick_enabled():
+                st.sidebar.error("Missing ITICK_TOKEN. Add it in your environment/secrets to enable intraday scan.")
+        except Exception:
             st.sidebar.error("Missing ITICK_TOKEN. Add it in your environment/secrets to enable intraday scan.")
 
 
@@ -819,8 +822,8 @@ with tab_stocks:
     intraday_map = None
     if breakout_model == "v3i":
         try:
-            import os
-            if not os.environ.get("ITICK_TOKEN"):
+            import bursa_core as _core
+            if not _core.itick_enabled():
                 st.error("Intraday model requires ITICK_TOKEN. Add it in your environment/secrets and refresh.")
                 st.stop()
         except Exception:
