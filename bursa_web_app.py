@@ -17,6 +17,8 @@ import time
 import os
 import hashlib
 import hmac
+import base64
+import json
 from urllib.parse import quote
 import streamlit.components.v1 as components
 import bursa_core as _core
@@ -62,6 +64,146 @@ def _sha256_hex(s: str) -> str:
     return hashlib.sha256(str(s).encode("utf-8")).hexdigest()
 
 
+def _auth_secret() -> str:
+    v = _get_secret_value("APP_AUTH_SECRET")
+    if v:
+        return str(v)
+    v = _get_secret_value("APP_PASSWORD")
+    if v:
+        return str(v)
+    v = _get_secret_value("APP_PASSWORD_SHA256")
+    if v:
+        return str(v)
+    v = _get_secret_value("APP_USERNAME")
+    if v:
+        return str(v)
+    return "change-me"
+
+
+def _b64url_encode(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).decode("utf-8").rstrip("=")
+
+
+def _b64url_decode(s: str) -> bytes:
+    pad = "=" * ((4 - (len(s) % 4)) % 4)
+    return base64.urlsafe_b64decode((s or "") + pad)
+
+
+def _make_auth_token(username: str, ttl_seconds: int = 12 * 3600) -> str:
+    payload = {"u": str(username or "").strip(), "exp": int(time.time()) + int(ttl_seconds)}
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    p = _b64url_encode(raw)
+    sig = hmac.new(_auth_secret().encode("utf-8"), p.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{p}.{sig}"
+
+
+def _verify_auth_token(token: str) -> str | None:
+    try:
+        t = str(token or "").strip()
+        if not t or "." not in t:
+            return None
+        p, sig = t.split(".", 1)
+        expected = hmac.new(_auth_secret().encode("utf-8"), p.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(str(sig), str(expected)):
+            return None
+        payload = json.loads(_b64url_decode(p).decode("utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        exp = int(payload.get("exp") or 0)
+        if exp <= int(time.time()):
+            return None
+        u = str(payload.get("u") or "").strip()
+        return u if u else None
+    except Exception:
+        return None
+
+
+def _strip_auth_from_url() -> None:
+    try:
+        components.html(
+            """
+<script>
+(function () {
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('auth')) return;
+    url.searchParams.delete('auth');
+    window.history.replaceState({}, '', url.toString());
+  } catch (e) {}
+})();
+</script>
+""",
+            height=0,
+        )
+    except Exception:
+        pass
+
+
+def _set_auth_cookie(token: str, max_age_seconds: int = 12 * 3600) -> None:
+    try:
+        t = str(token or "").strip()
+        if not t:
+            return
+        max_age = int(max_age_seconds)
+        components.html(
+            f"""
+<script>
+(function () {{
+  try {{
+    document.cookie = "bursa_auth=" + encodeURIComponent("{t}") + "; Max-Age={max_age}; Path=/; SameSite=Lax";
+  }} catch (e) {{}}
+}})();
+</script>
+""",
+            height=0,
+        )
+    except Exception:
+        pass
+
+
+def _clear_auth_cookie() -> None:
+    try:
+        components.html(
+            """
+<script>
+(function () {
+  try {
+    document.cookie = "bursa_auth=; Max-Age=0; Path=/; SameSite=Lax";
+  } catch (e) {}
+})();
+</script>
+""",
+            height=0,
+        )
+    except Exception:
+        pass
+
+
+def _autologin_redirect_if_cookie_present() -> None:
+    try:
+        components.html(
+            """
+<script>
+(function () {
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('auth')) return;
+    const m = document.cookie.match(/(?:^|;\\s*)bursa_auth=([^;]+)/);
+    if (!m || !m[1]) return;
+    const token = decodeURIComponent(m[1]);
+    if (!token) return;
+    url.searchParams.set('auth', token);
+    window.location.replace(url.toString());
+  } catch (e) {}
+})();
+</script>
+""",
+            height=0,
+        )
+    except Exception:
+        pass
+
+
 def _require_login(popup_mode: bool) -> None:
     expected_user = _get_secret_value("APP_USERNAME")
     expected_pw = _get_secret_value("APP_PASSWORD")
@@ -74,6 +216,18 @@ def _require_login(popup_mode: bool) -> None:
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
+    if not st.session_state.authenticated:
+        u_from_token = _verify_auth_token(_get_query_param("auth"))
+        if u_from_token:
+            st.session_state.authenticated = True
+            st.session_state.auth_user = u_from_token
+            _set_auth_cookie(_get_query_param("auth"), max_age_seconds=12 * 3600)
+            _strip_auth_from_url()
+            st.rerun()
+        if _get_query_param("auth"):
+            _clear_auth_cookie()
+            _strip_auth_from_url()
+
     if st.session_state.authenticated:
         if not popup_mode:
             try:
@@ -81,6 +235,7 @@ def _require_login(popup_mode: bool) -> None:
                     if st.button("Logout", use_container_width=True):
                         st.session_state.authenticated = False
                         st.session_state.auth_user = None
+                        _clear_auth_cookie()
                         st.rerun()
             except Exception:
                 pass
@@ -101,6 +256,8 @@ def _require_login(popup_mode: bool) -> None:
         if ok_user and ok_pw:
             st.session_state.authenticated = True
             st.session_state.auth_user = str(u or "").strip()
+            tok = _make_auth_token(st.session_state.auth_user, ttl_seconds=12 * 3600)
+            _set_auth_cookie(tok, max_age_seconds=12 * 3600)
             st.rerun()
         else:
             st.error("Invalid username or password.")
@@ -301,6 +458,7 @@ def _render_chart(symbol: str):
 chart_symbol = _get_query_param("chart")
 popup_mode = _get_query_param("popup")
 
+_autologin_redirect_if_cookie_present()
 _require_login(bool(popup_mode))
 
 if "breakout_model" not in st.session_state:
