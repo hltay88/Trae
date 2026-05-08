@@ -1688,7 +1688,7 @@ def _fetch_investingmalaysia_index_tickers(slug: str, max_pages: int = 12, max_s
         return []
 
 
-def refresh_index_components(index_key: str, force: bool = False, max_age_days: int = 30) -> tuple[list[str], str]:
+def refresh_index_components(index_key: str, force: bool = False, max_age_days: int = 30, allow_network: bool = True) -> tuple[list[str], str]:
     key = str(index_key or "").lower().strip()
     defs = {
         "fbm70": {
@@ -1726,6 +1726,16 @@ def refresh_index_components(index_key: str, force: bool = False, max_age_days: 
             cached_any = []
 
     try:
+        if not bool(allow_network):
+            if cached_any:
+                return cached_any, "cache"
+            return [], "cache-missing"
+    except Exception:
+        if cached_any:
+            return cached_any, "cache"
+        return [], "cache-missing"
+
+    try:
         if not force and os.path.exists(cache_file):
             try:
                 age_s = (pd.Timestamp.now() - pd.Timestamp.fromtimestamp(os.path.getmtime(cache_file))).total_seconds()
@@ -1755,7 +1765,7 @@ def get_index_components_info(index_key: str, max_age_days: int = 30) -> dict:
     key = str(index_key or "").lower().strip()
     cache_file = os.path.join(INDEX_COMPONENTS_CACHE_DIR, f"{key}.txt")
     try:
-        tickers, src = refresh_index_components(key, force=False, max_age_days=max_age_days)
+        tickers, src = refresh_index_components(key, force=False, max_age_days=max_age_days, allow_network=bool(INDEX_AUTO_UPDATE_ENABLED))
         updated = None
         if os.path.exists(cache_file):
             try:
@@ -1821,7 +1831,7 @@ def _find_tickers_by_name_keywords(keywords: list[str], max_hits: int = 80) -> l
 
 def _top100_membership_set(max_age_days: int = 30) -> set[str]:
     try:
-        fbm100, _ = refresh_index_components("fbm100", force=False, max_age_days=max_age_days)
+        fbm100, _ = refresh_index_components("fbm100", force=False, max_age_days=max_age_days, allow_network=bool(INDEX_AUTO_UPDATE_ENABLED))
         fbm100 = [str(x).upper().strip() for x in (fbm100 or []) if x]
         if len(fbm100) >= 70:
             return set(fbm100)
@@ -1834,7 +1844,7 @@ def _top100_membership_set(max_age_days: int = 30) -> set[str]:
     except Exception:
         s |= set(list(KLCI_COMPONENTS))
     try:
-        fbm70, _ = refresh_index_components("fbm70", force=False, max_age_days=max_age_days)
+        fbm70, _ = refresh_index_components("fbm70", force=False, max_age_days=max_age_days, allow_network=bool(INDEX_AUTO_UPDATE_ENABLED))
         if fbm70:
             s |= set(fbm70)
     except Exception:
@@ -2344,22 +2354,19 @@ def get_stock_universe(mode: str = "curated"):
             return u, f"klci-{src}"
         return list(KLCI_COMPONENTS), "klci-static"
     if m in {"fbm70", "mid70", "m70"}:
-        if INDEX_AUTO_UPDATE_ENABLED:
-            u, src = refresh_index_components("fbm70", force=bool(INDEX_FORCE_REFRESH), max_age_days=30)
-            if u:
-                return u, f"fbm70-{src}"
+        u, src = refresh_index_components("fbm70", force=bool(INDEX_FORCE_REFRESH), max_age_days=30, allow_network=bool(INDEX_AUTO_UPDATE_ENABLED))
+        if u:
+            return u, f"fbm70-{src}"
         return [], "fbm70-unavailable"
     if m in {"fbm100", "top100", "t100", "top_100"}:
-        if INDEX_AUTO_UPDATE_ENABLED:
-            u, src = refresh_index_components("fbm100", force=bool(INDEX_FORCE_REFRESH), max_age_days=30)
-            if u:
-                return u, f"fbm100-{src}"
+        u, src = refresh_index_components("fbm100", force=bool(INDEX_FORCE_REFRESH), max_age_days=30, allow_network=bool(INDEX_AUTO_UPDATE_ENABLED))
+        if u:
+            return u, f"fbm100-{src}"
         return [], "fbm100-unavailable"
     if m in {"smallcap", "small", "sc"}:
-        if INDEX_AUTO_UPDATE_ENABLED:
-            u, src = refresh_index_components("smallcap", force=bool(INDEX_FORCE_REFRESH), max_age_days=30)
-            if u:
-                return u, f"smallcap-{src}"
+        u, src = refresh_index_components("smallcap", force=bool(INDEX_FORCE_REFRESH), max_age_days=30, allow_network=bool(INDEX_AUTO_UPDATE_ENABLED))
+        if u:
+            return u, f"smallcap-{src}"
         return [], "smallcap-unavailable"
     if m in {"auto", "malaysia", "my"}:
         u = _load_or_refresh_auto_universe()
