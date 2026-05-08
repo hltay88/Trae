@@ -15,7 +15,21 @@ import plotly.graph_objects as go
 import pandas as pd
 from urllib.parse import quote
 import streamlit.components.v1 as components
-from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, analyze_breakout_v2, analyze_breakout_v3, analyze_breakout_v3_intraday, analyze_breakout_v3_quote, search_bursa, get_top_breakouts, get_stock_universe, BURSA_UNIVERSE_FILE, KLCI_COMPONENTS, get_futures_breakouts
+import bursa_core as _core
+
+MARKET_INSIGHTS = _core.MARKET_INSIGHTS
+get_stock_data = _core.get_stock_data
+analyze_breakout = _core.analyze_breakout
+analyze_breakout_v2 = _core.analyze_breakout_v2
+analyze_breakout_v3 = _core.analyze_breakout_v3
+analyze_breakout_v3_intraday = getattr(_core, "analyze_breakout_v3_intraday", None)
+analyze_breakout_v3_quote = getattr(_core, "analyze_breakout_v3_quote", None)
+search_bursa = _core.search_bursa
+get_top_breakouts = _core.get_top_breakouts
+get_stock_universe = _core.get_stock_universe
+BURSA_UNIVERSE_FILE = _core.BURSA_UNIVERSE_FILE
+KLCI_COMPONENTS = _core.KLCI_COMPONENTS
+get_futures_breakouts = _core.get_futures_breakouts
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Bursa Breakout Analyzer", layout="wide", page_icon="📈")
@@ -913,23 +927,29 @@ with tab_stocks:
                     code = str(t).upper().strip().split(".")[0]
                     intra = (intraday_map or {}).get(code) if intraday_map is not None else None
                     if intra is not None and (not intra.empty):
-                        analysis = analyze_breakout_v3_intraday(
+                        if analyze_breakout_v3_intraday is None:
+                            analysis = None
+                        else:
+                            analysis = analyze_breakout_v3_intraday(
                             t,
                             df,
                             intra,
                             resolved_name=name,
                             max_runup_pct=st.session_state.v3_max_runup_pct,
                             min_intraday_bars=40,
-                        )
+                            )
                     else:
                         q = (quote_map or {}).get(code) if quote_map is not None else None
-                        analysis = analyze_breakout_v3_quote(
-                            t,
-                            df,
-                            q,
-                            resolved_name=name,
-                            max_runup_pct=st.session_state.v3_max_runup_pct,
-                        )
+                        if analyze_breakout_v3_quote is None:
+                            analysis = None
+                        else:
+                            analysis = analyze_breakout_v3_quote(
+                                t,
+                                df,
+                                q,
+                                resolved_name=name,
+                                max_runup_pct=st.session_state.v3_max_runup_pct,
+                            )
                 elif breakout_model == "v2":
                     analysis = analyze_breakout_v2(t, df, name, benchmark_df=benchmark_df, min_rows=min(120, len(df)))
                 else:
