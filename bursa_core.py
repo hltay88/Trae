@@ -84,6 +84,8 @@ ITICK_BASE_URL = os.environ.get("ITICK_BASE_URL") or "https://api.itick.org"
 ITICK_DEFAULT_REGION = os.environ.get("ITICK_REGION") or "MY"
 ITICK_CACHE_SECONDS = 20
 _ITICK_KLINE_CACHE: dict[str, tuple[float, dict]] = {}
+ITICK_QUOTE_CACHE_SECONDS = 10
+_ITICK_QUOTE_CACHE: dict[str, tuple[float, dict]] = {}
 _ITICK_INFO_CACHE: dict[str, tuple[float, str]] = {}
 ITICK_INFO_CACHE_SECONDS = 24 * 3600
 
@@ -147,11 +149,13 @@ def itick_enabled() -> bool:
         return False
 
 
-def _itick_get_json(path: str, params: dict) -> dict | None:
+def _itick_get_json_with_meta(path: str, params: dict) -> tuple[dict | None, dict]:
     try:
+        meta = {"http_status": None, "api_code": None, "msg": None}
         token = _get_itick_token()
         if not token:
-            return None
+            meta["msg"] = "missing-token"
+            return None, meta
         url = str(ITICK_BASE_URL).rstrip("/") + str(path)
         r = requests.get(
             url,
@@ -159,21 +163,79 @@ def _itick_get_json(path: str, params: dict) -> dict | None:
             headers={"accept": "application/json", "token": token, "User-Agent": "Mozilla/5.0"},
             timeout=20,
         )
-        if r.status_code != 200:
-            return None
-        j = r.json()
+        meta["http_status"] = int(getattr(r, "status_code", 0) or 0)
+        try:
+            j = r.json()
+        except Exception:
+            j = None
+        if isinstance(j, dict):
+            meta["api_code"] = j.get("code")
+            meta["msg"] = j.get("msg")
+        if meta["http_status"] != 200:
+            return None, meta
         if not isinstance(j, dict):
-            return None
+            return None, meta
         if int(j.get("code", 0) or 0) != 0:
-            return None
+            return None, meta
+        return j, meta
+    except Exception:
+        return None, {"http_status": None, "api_code": None, "msg": "error"}
+
+
+def _itick_get_json(path: str, params: dict) -> dict | None:
+    try:
+        j, _ = _itick_get_json_with_meta(path, params)
         return j
     except Exception:
         return None
 
 
+def itick_probe_stock_klines(code: str, region: str | None = None, ktype: int = 2, limit: int = 5) -> dict:
+    try:
+        region_in = (region or ITICK_DEFAULT_REGION or "MY").strip()
+        c = str(code or "").strip().upper()
+        if c.endswith(".KL"):
+            c = c[:-3]
+        params = {"region": region_in, "codes": c, "kType": str(int(ktype)), "limit": str(int(limit))}
+        _, meta = _itick_get_json_with_meta("/stock/klines", params)
+        meta["region"] = region_in
+        meta["code"] = c
+        return meta
+    except Exception:
+        return {"http_status": None, "api_code": None, "msg": "error", "region": region, "code": code}
+
+
+def itick_probe_stock_quotes(code: str, region: str | None = None) -> dict:
+    try:
+        region_in = (region or ITICK_DEFAULT_REGION or "MY").strip()
+        c = str(code or "").strip().upper()
+        if c.endswith(".KL"):
+            c = c[:-3]
+        params = {"region": region_in, "codes": c}
+        _, meta = _itick_get_json_with_meta("/stock/quotes", params)
+        meta["region"] = region_in
+        meta["code"] = c
+        return meta
+    except Exception:
+        return {"http_status": None, "api_code": None, "msg": "error", "region": region, "code": code}
+
+
 def _itick_stock_klines(codes: list[str], ktype: int = 2, limit: int = 120, region: str | None = None) -> dict[str, pd.DataFrame]:
     try:
-        region_v = (region or ITICK_DEFAULT_REGION or "MY").strip().upper()
+        region_in = (region or ITICK_DEFAULT_REGION or "MY").strip()
+        region_u = region_in.upper()
+        region_candidates = []
+        for v in [region_in, region_u]:
+            if v and v not in region_candidates:
+                region_candidates.append(v)
+        if region_u == "MY":
+            for v in ["Malaysia", "MALAYSIA"]:
+                if v not in region_candidates:
+                    region_candidates.append(v)
+        elif region_u == "MALAYSIA":
+            for v in ["MY"]:
+                if v not in region_candidates:
+                    region_candidates.append(v)
         norm_codes = []
         for c in codes or []:
             x = str(c or "").strip().upper()
@@ -193,17 +255,22 @@ def _itick_stock_klines(codes: list[str], ktype: int = 2, limit: int = 120, regi
         if ktype_i not in {1, 2, 3, 4, 5, 8}:
             ktype_i = 2
 
-        cache_key = f"{region_v}|{ktype_i}|{limit_i}|{','.join(norm_codes)}"
+        cache_key = f"{region_candidates[0] if region_candidates else region_in}|{ktype_i}|{limit_i}|{','.join(norm_codes)}"
         now = time.time()
         hit = _ITICK_KLINE_CACHE.get(cache_key)
         if hit and (now - float(hit[0])) <= float(ITICK_CACHE_SECONDS):
             return hit[1]
 
-        params = {"region": region_v, "codes": ",".join(norm_codes), "kType": str(ktype_i), "limit": str(limit_i)}
-        j = _itick_get_json("/stock/klines", params)
-        if not j:
-            return {}
-        data = j.get("data")
+        data = None
+        for region_v in (region_candidates or [region_in]):
+            params = {"region": region_v, "codes": ",".join(norm_codes), "kType": str(ktype_i), "limit": str(limit_i)}
+            j = _itick_get_json("/stock/klines", params)
+            if not j:
+                continue
+            d = j.get("data")
+            if isinstance(d, dict):
+                data = d
+                break
         if not isinstance(data, dict):
             return {}
 
@@ -244,6 +311,63 @@ def _itick_stock_klines(codes: list[str], ktype: int = 2, limit: int = 120, regi
             out[str(code).upper().strip()] = df
 
         _ITICK_KLINE_CACHE[cache_key] = (now, out)
+        return out
+    except Exception:
+        return {}
+
+
+def _itick_stock_quotes(codes: list[str], region: str | None = None) -> dict[str, dict]:
+    try:
+        region_in = (region or ITICK_DEFAULT_REGION or "MY").strip()
+        region_u = region_in.upper()
+        region_candidates = []
+        for v in [region_in, region_u]:
+            if v and v not in region_candidates:
+                region_candidates.append(v)
+        if region_u == "MY":
+            for v in ["Malaysia", "MALAYSIA"]:
+                if v not in region_candidates:
+                    region_candidates.append(v)
+        elif region_u == "MALAYSIA":
+            for v in ["MY"]:
+                if v not in region_candidates:
+                    region_candidates.append(v)
+
+        norm_codes = []
+        for c in codes or []:
+            x = str(c or "").strip().upper()
+            if x.endswith(".KL"):
+                x = x[:-3]
+            if x:
+                norm_codes.append(x)
+        norm_codes = sorted(set(norm_codes))
+        if not norm_codes:
+            return {}
+
+        cache_key = f"{region_candidates[0] if region_candidates else region_in}|{','.join(norm_codes)}"
+        now = time.time()
+        hit = _ITICK_QUOTE_CACHE.get(cache_key)
+        if hit and (now - float(hit[0])) <= float(ITICK_QUOTE_CACHE_SECONDS):
+            return hit[1]
+
+        data = None
+        for region_v in (region_candidates or [region_in]):
+            j = _itick_get_json("/stock/quotes", {"region": region_v, "codes": ",".join(norm_codes)})
+            if not j:
+                continue
+            d = j.get("data")
+            if isinstance(d, dict):
+                data = d
+                break
+        if not isinstance(data, dict):
+            return {}
+
+        out = {}
+        for k, v in data.items():
+            if not isinstance(v, dict):
+                continue
+            out[str(k).upper().strip()] = v
+        _ITICK_QUOTE_CACHE[cache_key] = (now, out)
         return out
     except Exception:
         return {}
@@ -1614,6 +1738,99 @@ def analyze_breakout_v3_intraday(ticker: str, daily_df: pd.DataFrame, intraday_d
         "breakout_level": float(breakout_level),
         "power_candle": bool(power_candle),
         "volume_spike": bool(volume_spike),
+        "liquidity_ok": True,
+        "analysis": analysis,
+        "catalyst": catalyst,
+        "model": "v3i",
+    }
+
+
+def analyze_breakout_v3_quote(ticker: str, daily_df: pd.DataFrame, quote: dict, resolved_name: str | None = None, max_runup_pct: float | None = 5.0):
+    if daily_df is None or daily_df.empty or not isinstance(quote, dict):
+        return None
+
+    ticker = str(ticker or "").upper().strip()
+    df_d = daily_df.copy()
+    if "Close" in df_d.columns:
+        df_d["Close"] = pd.to_numeric(df_d["Close"], errors="coerce")
+    df_d = df_d.dropna(subset=["Close"]).copy()
+    if df_d.empty:
+        return None
+
+    breakout_lookback = 55
+    if len(df_d) < breakout_lookback + 5:
+        return None
+    try:
+        breakout_level = float(df_d["Close"].iloc[-breakout_lookback:-1].max())
+        if not (breakout_level > 0.0):
+            return None
+    except Exception:
+        return None
+
+    try:
+        last_price = float(quote.get("ld"))
+        if not (last_price > 0.0):
+            return None
+    except Exception:
+        return None
+
+    if not (last_price > breakout_level):
+        return None
+
+    runup_pct = ((last_price / breakout_level) - 1.0) * 100.0
+    max_run = None
+    try:
+        if max_runup_pct is not None and str(max_runup_pct).strip() != "":
+            max_run = float(max_runup_pct)
+    except Exception:
+        max_run = None
+    if max_run is not None:
+        try:
+            if float(runup_pct) > float(max_run):
+                return None
+        except Exception:
+            pass
+
+    ts = None
+    try:
+        t_ms = quote.get("t")
+        if t_ms is not None:
+            ts = pd.to_datetime(int(t_ms), unit="ms", utc=True).tz_convert("Asia/Kuala_Lumpur")
+    except Exception:
+        ts = None
+    if ts is None:
+        ts = pd.Timestamp.now(tz="Asia/Kuala_Lumpur")
+
+    code, name, sector, analysis, catalyst = _resolve_insight_v3(ticker, resolved_name)
+    score = 0
+    score_max = 7
+    score += 1
+    score += 1
+    score += 1 if max_run is None or runup_pct <= max_run else 0
+    score += 1
+
+    return {
+        "ticker": ticker,
+        "name": name,
+        "sector": sector,
+        "price": float(last_price),
+        "rsi": 50.0,
+        "score": int(score),
+        "score_max": int(score_max),
+        "breakout_55": True,
+        "breakout_candle": True,
+        "breakout_candle_valid": True,
+        "breakout_hold_ok": True,
+        "runup_pct": float(runup_pct),
+        "max_runup_pct": None if max_run is None else float(max_run),
+        "max_pullback_pct": None,
+        "retest_days": 0,
+        "retest_confirmed": False,
+        "breakout_candle_date": pd.Timestamp(ts).date().isoformat(),
+        "breakout_candle_age": 0,
+        "breakout_level": float(breakout_level),
+        "power_candle": None,
+        "volume_spike": None,
         "liquidity_ok": True,
         "analysis": analysis,
         "catalyst": catalyst,

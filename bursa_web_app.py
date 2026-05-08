@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 import pandas as pd
 from urllib.parse import quote
 import streamlit.components.v1 as components
-from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, analyze_breakout_v2, analyze_breakout_v3, analyze_breakout_v3_intraday, search_bursa, get_top_breakouts, get_stock_universe, BURSA_UNIVERSE_FILE, KLCI_COMPONENTS, get_futures_breakouts
+from bursa_core import MARKET_INSIGHTS, get_stock_data, analyze_breakout, analyze_breakout_v2, analyze_breakout_v3, analyze_breakout_v3_intraday, analyze_breakout_v3_quote, search_bursa, get_top_breakouts, get_stock_universe, BURSA_UNIVERSE_FILE, KLCI_COMPONENTS, get_futures_breakouts
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Bursa Breakout Analyzer", layout="wide", page_icon="📈")
@@ -829,8 +829,10 @@ with tab_stocks:
             benchmark_df = None
 
     intraday_map = None
+    quote_map = None
     intraday_attempted = 0
     intraday_success = 0
+    quote_success = 0
     if breakout_model == "v3i":
         try:
             import bursa_core as _core
@@ -849,17 +851,42 @@ with tab_stocks:
                 if code:
                     codes.append(code)
             codes_u = sorted(set(codes))
-            intraday_attempted = len(codes_u)
-            intraday_map = _core._itick_stock_klines(codes_u[: int(st.session_state.get("intraday_max_tickers") or 50)], ktype=2, limit=160, region=None)
+            max_i = int(st.session_state.get("intraday_max_tickers") or 50)
+            if max_i < 1:
+                max_i = 50
+            req_codes = codes_u[:max_i]
+            intraday_attempted = len(req_codes)
+            intraday_map = _core._itick_stock_klines(req_codes, ktype=2, limit=160, region=None)
             intraday_success = sum(1 for _, dfi in (intraday_map or {}).items() if dfi is not None and not dfi.empty)
         except Exception:
             intraday_map = {}
             intraday_success = 0
         if intraday_attempted > 0 and intraday_success == 0:
-            st.error("iTick returned no intraday bars for this watchlist. Check your iTick plan supports MY stocks, or try a smaller universe (KLCI/FBM100) and retry.")
+            try:
+                quote_map = _core._itick_stock_quotes(req_codes, region=None)
+                quote_success = sum(1 for _, q in (quote_map or {}).items() if isinstance(q, dict) and q.get("ld") is not None)
+            except Exception:
+                quote_map = {}
+                quote_success = 0
+
+        if intraday_attempted > 0 and intraday_success == 0 and quote_success == 0:
+            try:
+                probe_k = _core.itick_probe_stock_klines((req_codes or ["1155"])[0], region=None, ktype=2, limit=5)
+                probe_q = _core.itick_probe_stock_quotes((req_codes or ["1155"])[0], region=None)
+                st.error(
+                    f"iTick returned no intraday data. "
+                    f"Klines HTTP={probe_k.get('http_status')}, api_code={probe_k.get('api_code')}, msg={probe_k.get('msg')}. "
+                    f"Quotes HTTP={probe_q.get('http_status')}, api_code={probe_q.get('api_code')}, msg={probe_q.get('msg')}."
+                )
+            except Exception:
+                st.error("iTick returned no intraday data for this watchlist. Check your iTick plan supports MY stocks (klines/quotes), then retry.")
             st.stop()
+
         if intraday_attempted > 0:
-            st.caption(f"Intraday fetch: {intraday_success}/{intraday_attempted} tickers returned intraday bars.")
+            if intraday_success > 0:
+                st.caption(f"Intraday bars: {intraday_success}/{intraday_attempted} tickers returned 5-minute bars.")
+            else:
+                st.caption(f"Intraday bars: 0/{intraday_attempted}. Using real-time quotes instead (no 5-minute bars).")
 
     # Use a spinner for the load
     with st.spinner("Fetching latest live prices..."):
@@ -885,14 +912,24 @@ with tab_stocks:
                 elif breakout_model == "v3i":
                     code = str(t).upper().strip().split(".")[0]
                     intra = (intraday_map or {}).get(code) if intraday_map is not None else None
-                    analysis = analyze_breakout_v3_intraday(
-                        t,
-                        df,
-                        intra,
-                        resolved_name=name,
-                        max_runup_pct=st.session_state.v3_max_runup_pct,
-                        min_intraday_bars=40,
-                    )
+                    if intra is not None and (not intra.empty):
+                        analysis = analyze_breakout_v3_intraday(
+                            t,
+                            df,
+                            intra,
+                            resolved_name=name,
+                            max_runup_pct=st.session_state.v3_max_runup_pct,
+                            min_intraday_bars=40,
+                        )
+                    else:
+                        q = (quote_map or {}).get(code) if quote_map is not None else None
+                        analysis = analyze_breakout_v3_quote(
+                            t,
+                            df,
+                            q,
+                            resolved_name=name,
+                            max_runup_pct=st.session_state.v3_max_runup_pct,
+                        )
                 elif breakout_model == "v2":
                     analysis = analyze_breakout_v2(t, df, name, benchmark_df=benchmark_df, min_rows=min(120, len(df)))
                 else:
