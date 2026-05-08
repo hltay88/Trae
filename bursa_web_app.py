@@ -889,8 +889,8 @@ with tab_stocks:
                 probe_q = _core.itick_probe_stock_quotes((req_codes or ["1155"])[0], region=None)
                 st.error(
                     f"iTick returned no intraday data. "
-                    f"Klines HTTP={probe_k.get('http_status')}, api_code={probe_k.get('api_code')}, msg={probe_k.get('msg')}. "
-                    f"Quotes HTTP={probe_q.get('http_status')}, api_code={probe_q.get('api_code')}, msg={probe_q.get('msg')}."
+                    f"Klines HTTP={probe_k.get('http_status')}, api_code={probe_k.get('api_code')}, msg={probe_k.get('msg')}, auth={probe_k.get('auth_header')}. "
+                    f"Quotes HTTP={probe_q.get('http_status')}, api_code={probe_q.get('api_code')}, msg={probe_q.get('msg')}, auth={probe_q.get('auth_header')}."
                 )
             except Exception:
                 st.error("iTick returned no intraday data for this watchlist. Check your iTick plan supports MY stocks (klines/quotes), then retry.")

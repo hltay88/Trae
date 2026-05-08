@@ -151,33 +151,47 @@ def itick_enabled() -> bool:
 
 def _itick_get_json_with_meta(path: str, params: dict) -> tuple[dict | None, dict]:
     try:
-        meta = {"http_status": None, "api_code": None, "msg": None}
+        meta = {"http_status": None, "api_code": None, "msg": None, "auth_header": None, "body": None}
         token = _get_itick_token()
         if not token:
             meta["msg"] = "missing-token"
             return None, meta
         url = str(ITICK_BASE_URL).rstrip("/") + str(path)
-        r = requests.get(
-            url,
-            params=params,
-            headers={"accept": "application/json", "token": token, "User-Agent": "Mozilla/5.0"},
-            timeout=20,
-        )
-        meta["http_status"] = int(getattr(r, "status_code", 0) or 0)
-        try:
-            j = r.json()
-        except Exception:
+        header_candidates = [
+            ("token", {"accept": "application/json", "token": token, "User-Agent": "Mozilla/5.0"}),
+            ("Token", {"accept": "application/json", "Token": token, "User-Agent": "Mozilla/5.0"}),
+            ("Authorization", {"accept": "application/json", "Authorization": f"Bearer {token}", "User-Agent": "Mozilla/5.0"}),
+        ]
+        last_meta = dict(meta)
+        for header_name, headers in header_candidates:
+            try:
+                r = requests.get(url, params=params, headers=headers, timeout=20)
+            except Exception:
+                continue
+            last_meta = {"http_status": int(getattr(r, "status_code", 0) or 0), "api_code": None, "msg": None, "auth_header": header_name, "body": None}
             j = None
-        if isinstance(j, dict):
-            meta["api_code"] = j.get("code")
-            meta["msg"] = j.get("msg")
-        if meta["http_status"] != 200:
-            return None, meta
-        if not isinstance(j, dict):
-            return None, meta
-        if int(j.get("code", 0) or 0) != 0:
-            return None, meta
-        return j, meta
+            try:
+                j = r.json()
+            except Exception:
+                j = None
+            if isinstance(j, dict):
+                last_meta["api_code"] = j.get("code")
+                last_meta["msg"] = j.get("msg")
+            else:
+                try:
+                    txt = r.text
+                    if txt:
+                        last_meta["body"] = str(txt)[:200]
+                except Exception:
+                    pass
+            if int(last_meta["http_status"] or 0) != 200:
+                continue
+            if not isinstance(j, dict):
+                continue
+            if int(j.get("code", 0) or 0) != 0:
+                continue
+            return j, last_meta
+        return None, last_meta
     except Exception:
         return None, {"http_status": None, "api_code": None, "msg": "error"}
 
