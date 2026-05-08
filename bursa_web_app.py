@@ -485,6 +485,31 @@ if chart_symbol:
         st.markdown("[Back to Dashboard](/)")
     st.stop()
 
+def _uniq_tickers(seq):
+    seen = set()
+    out = []
+    for x in (seq or []):
+        s = str(x or "").upper().strip()
+        if not s:
+            continue
+        if s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
+if "manual_watchlist" not in st.session_state:
+    st.session_state.manual_watchlist = []
+
+
+def _apply_watchlist(scanned=None):
+    manual = _uniq_tickers(st.session_state.get("manual_watchlist") or [])
+    scan = _uniq_tickers(scanned or [])
+    st.session_state.manual_watchlist = manual
+    st.session_state.watchlist = _uniq_tickers(manual + scan)
+
+
 # Initialize session state for watchlist
 if 'watchlist' not in st.session_state:
     with st.spinner("Initializing Market Discovery..."):
@@ -500,10 +525,10 @@ if 'watchlist' not in st.session_state:
             max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
         )
         if top_breakouts:
-            st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+            _apply_watchlist([res['ticker'] for res in top_breakouts])
         else:
             fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
-            st.session_state.watchlist = list(fallback_universe[:20])
+            _apply_watchlist(list(fallback_universe[:20]))
 
 # Sidebar for adding stocks (hide in popup mode)
 if not popup_mode:
@@ -561,9 +586,9 @@ if not popup_mode:
                 max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
             )
             if top_breakouts:
-                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                _apply_watchlist([res['ticker'] for res in top_breakouts])
             else:
-                st.session_state.watchlist = list(universe_list[:20])
+                _apply_watchlist(list(universe_list[:20]))
         st.rerun()
 
     if st.session_state.universe_mode in {"klci", "fbm70", "fbm100", "smallcap"} or str(st.session_state.universe_mode).startswith("sector-"):
@@ -633,7 +658,7 @@ if not popup_mode:
                         max_pullback_pct=st.session_state.v3_max_pullback_pct,
                         retest_days=st.session_state.v3_retest_days,
                     )
-                    st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                    _apply_watchlist([res['ticker'] for res in top_breakouts])
                 st.rerun()
         except Exception:
             pass
@@ -656,10 +681,10 @@ if not popup_mode:
                     max_tickers=st.session_state.max_tickers_scan,
                 )
                 if top_breakouts:
-                    st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                    _apply_watchlist([res['ticker'] for res in top_breakouts])
                 else:
                     fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
-                    st.session_state.watchlist = list(fallback_universe[:20])
+                    _apply_watchlist(list(fallback_universe[:20]))
             st.rerun()
     if st.session_state.universe_mode == "file":
         st.sidebar.caption("Universe source: bursa_universe.csv in the app folder. Put one 4-digit stock code per line (Main + ACE). Example: 6742 or 6742.KL.")
@@ -689,10 +714,10 @@ if not popup_mode:
                 max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
             )
             if top_breakouts:
-                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                _apply_watchlist([res['ticker'] for res in top_breakouts])
             else:
                 fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
-                st.session_state.watchlist = list(fallback_universe[:20])
+                _apply_watchlist(list(fallback_universe[:20]))
         st.rerun()
 
     if st.session_state.breakout_model == "v3tv":
@@ -814,17 +839,17 @@ if not popup_mode:
                         elif st.session_state.v3_signal_filter == "failed" and is_failed:
                             filtered.append(r)
                     if filtered:
-                        st.session_state.watchlist = [res['ticker'] for res in filtered[:20]]
+                        _apply_watchlist([res['ticker'] for res in filtered[:20]])
                         st.session_state.v3_filter_note = None
                     else:
                         st.session_state.v3_filter_note = "No matching Late/Failed signals found in the scanned universe. Showing the default list instead."
                         if top_breakouts:
-                            st.session_state.watchlist = [res['ticker'] for res in top_breakouts[:20]]
+                            _apply_watchlist([res['ticker'] for res in top_breakouts[:20]])
                         else:
                             fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
-                            st.session_state.watchlist = list(fallback_universe[:20])
+                            _apply_watchlist(list(fallback_universe[:20]))
                 else:
-                    st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                    _apply_watchlist([res['ticker'] for res in top_breakouts])
                     st.session_state.v3_filter_note = None
             st.rerun()
 
@@ -932,7 +957,7 @@ if not popup_mode:
                         retest_days=st.session_state.v3_retest_days,
                         max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
                     )
-                    st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                    _apply_watchlist([res['ticker'] for res in top_breakouts])
 
     sectors = sorted({str(v.get("sector")).strip() for v in MARKET_INSIGHTS.values() if str(v.get("sector") or "").strip()})
     if sectors:
@@ -955,7 +980,7 @@ if not popup_mode:
                     retest_days=st.session_state.v3_retest_days,
                     max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
                 )
-                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                _apply_watchlist([res['ticker'] for res in top_breakouts])
             st.rerun()
 
     if st.sidebar.button("🔄 Refresh Market Discovery", use_container_width=True):
@@ -972,10 +997,10 @@ if not popup_mode:
                 max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
             )
             if top_breakouts:
-                st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+                _apply_watchlist([res['ticker'] for res in top_breakouts])
             else:
                 fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
-                st.session_state.watchlist = list(fallback_universe[:20])
+                _apply_watchlist(list(fallback_universe[:20]))
             st.success("Dashboard updated!")
             st.rerun()
 
@@ -1012,14 +1037,23 @@ if not popup_mode:
     if st.sidebar.button("Add to Watchlist", use_container_width=True):
         ticker = search_bursa(new_stock)
         if ticker:
-            if ticker not in st.session_state.watchlist:
-                st.session_state.watchlist.append(ticker)
+            manual = _uniq_tickers(st.session_state.get("manual_watchlist") or [])
+            t_u = str(ticker).upper().strip()
+            if t_u not in manual:
+                manual.append(t_u)
+                st.session_state.manual_watchlist = manual
+            _apply_watchlist(st.session_state.get("watchlist") or [])
+            if t_u in st.session_state.watchlist:
                 st.success(f"Added {ticker}!")
                 st.rerun()
             else:
                 st.info(f"{ticker} is already in your list.")
         else:
             st.error("Could not find stock. Try using the exact code (e.g., 5347).")
+    if st.sidebar.button("Clear manual watchlist", use_container_width=True):
+        st.session_state.manual_watchlist = []
+        _apply_watchlist(st.session_state.get("watchlist") or [])
+        st.rerun()
 
     if st.sidebar.button("🗑️ Reset to Top 20", use_container_width=True):
         top_breakouts = get_top_breakouts(
@@ -1033,7 +1067,7 @@ if not popup_mode:
             retest_days=st.session_state.v3_retest_days,
             max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
         )
-        st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
+        _apply_watchlist([res['ticker'] for res in top_breakouts])
         st.rerun()
 
 # --- MAIN DASHBOARD TABS ---
