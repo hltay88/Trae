@@ -91,12 +91,24 @@ ITICK_INFO_CACHE_SECONDS = 24 * 3600
 
 
 def _get_itick_token() -> str | None:
+    def _clean(v) -> str | None:
+        try:
+            if v is None:
+                return None
+            s = str(v)
+            if not s:
+                return None
+            s = re.sub(r"\s+", "", s)
+            s = s.strip()
+            return s if s else None
+        except Exception:
+            return None
+
     try:
         token = os.environ.get("ITICK_TOKEN") or os.environ.get("itick_token")
-        if token:
-            token_s = str(token).strip()
-            if token_s:
-                return token_s
+        token_s = _clean(token)
+        if token_s:
+            return token_s
     except Exception:
         pass
 
@@ -113,10 +125,9 @@ def _get_itick_token() -> str | None:
                             v = ss[k]
                         except Exception:
                             v = None
-                    if v:
-                        v_s = str(v).strip()
-                        if v_s:
-                            return v_s
+                    v_s = _clean(v)
+                    if v_s:
+                        return v_s
         except Exception:
             pass
         secrets = getattr(st, "secrets", None)
@@ -133,10 +144,9 @@ def _get_itick_token() -> str | None:
                     v = secrets.get(k)
                 except Exception:
                     v = None
-            if v:
-                v_s = str(v).strip()
-                if v_s:
-                    return v_s
+            v_s = _clean(v)
+            if v_s:
+                return v_s
         return None
     except Exception:
         return None
@@ -151,7 +161,7 @@ def itick_enabled() -> bool:
 
 def _itick_get_json_with_meta(path: str, params: dict) -> tuple[dict | None, dict]:
     try:
-        meta = {"http_status": None, "api_code": None, "msg": None, "auth_header": None, "body": None}
+        meta = {"http_status": None, "api_code": None, "msg": None, "auth_header": None, "body": None, "attempts": []}
         token = _get_itick_token()
         if not token:
             meta["msg"] = "missing-token"
@@ -168,7 +178,7 @@ def _itick_get_json_with_meta(path: str, params: dict) -> tuple[dict | None, dic
                 r = requests.get(url, params=params, headers=headers, timeout=20)
             except Exception:
                 continue
-            last_meta = {"http_status": int(getattr(r, "status_code", 0) or 0), "api_code": None, "msg": None, "auth_header": header_name, "body": None}
+            last_meta = {"http_status": int(getattr(r, "status_code", 0) or 0), "api_code": None, "msg": None, "auth_header": header_name, "body": None, "attempts": list(meta.get("attempts") or [])}
             j = None
             try:
                 j = r.json()
@@ -184,6 +194,17 @@ def _itick_get_json_with_meta(path: str, params: dict) -> tuple[dict | None, dic
                         last_meta["body"] = str(txt)[:200]
                 except Exception:
                     pass
+            try:
+                last_meta["attempts"].append(
+                    {
+                        "auth": header_name,
+                        "http": last_meta.get("http_status"),
+                        "api_code": last_meta.get("api_code"),
+                        "msg": last_meta.get("msg"),
+                    }
+                )
+            except Exception:
+                pass
             if int(last_meta["http_status"] or 0) != 200:
                 continue
             if not isinstance(j, dict):

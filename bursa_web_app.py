@@ -503,6 +503,12 @@ if not popup_mode:
             if not _core.itick_enabled():
                 if not _core.itick_enabled():
                     st.sidebar.error("Missing ITICK_TOKEN. Add it in your environment/secrets (or paste above) to enable intraday scan.")
+            else:
+                try:
+                    tok_len = len(str(_core._get_itick_token() or ""))
+                    st.sidebar.caption(f"iTick token detected (length {tok_len}).")
+                except Exception:
+                    pass
         except Exception:
             st.sidebar.error("Missing ITICK_TOKEN. Add it in your environment/secrets to enable intraday scan.")
 
@@ -887,11 +893,17 @@ with tab_stocks:
             try:
                 probe_k = _core.itick_probe_stock_klines((req_codes or ["1155"])[0], region=None, ktype=2, limit=5)
                 probe_q = _core.itick_probe_stock_quotes((req_codes or ["1155"])[0], region=None)
+                attempts_k = probe_k.get("attempts") or []
+                attempts_q = probe_q.get("attempts") or []
+                auths_k = ",".join([str(a.get("auth")) for a in attempts_k if isinstance(a, dict) and a.get("auth")])
+                auths_q = ",".join([str(a.get("auth")) for a in attempts_q if isinstance(a, dict) and a.get("auth")])
                 st.error(
                     f"iTick returned no intraday data. "
                     f"Klines HTTP={probe_k.get('http_status')}, api_code={probe_k.get('api_code')}, msg={probe_k.get('msg')}, auth={probe_k.get('auth_header')}. "
                     f"Quotes HTTP={probe_q.get('http_status')}, api_code={probe_q.get('api_code')}, msg={probe_q.get('msg')}, auth={probe_q.get('auth_header')}."
                 )
+                if probe_k.get("http_status") == 401 or probe_q.get("http_status") == 401:
+                    st.info(f"401 Unauthorized from iTick. Tried auth headers: klines={auths_k or 'n/a'}, quotes={auths_q or 'n/a'}. Your API Key is invalid/expired or pasted with whitespace/newlines. Use the copy button on iTick dashboard, or click Renew and paste again.")
             except Exception:
                 st.error("iTick returned no intraday data for this watchlist. Check your iTick plan supports MY stocks (klines/quotes), then retry.")
             st.stop()
