@@ -714,6 +714,8 @@ if not popup_mode:
             st.session_state.v3_entry_style = "Early Entry"
         if "v3_signal_filter" not in st.session_state:
             st.session_state.v3_signal_filter = "all"
+        if "v3_show_watchlist_all" not in st.session_state:
+            st.session_state.v3_show_watchlist_all = True
 
         entry_options = [
             "Early Entry (Recommended)",
@@ -835,6 +837,11 @@ if not popup_mode:
         )
 
         st.sidebar.caption("Note: V3 is stricter than V1/V2. A stock can rank high in V1 but show no V3 signal if it lacks a recent power-candle + volume breakout.")
+        st.session_state.v3_show_watchlist_all = st.sidebar.toggle(
+            "Show watchlist even without signal",
+            value=bool(st.session_state.v3_show_watchlist_all),
+            help="If enabled, manually added stocks still appear even when they have no V3/V3tv breakout signal yet.",
+        )
 
         if "v3_breakout_day_only" not in st.session_state:
             st.session_state.v3_breakout_day_only = False
@@ -1057,7 +1064,14 @@ with tab_stocks:
                 code = str(t).upper().strip().split(".")[0]
                 if code:
                     codes.append(code)
-            codes_u = sorted(set(codes))
+            seen = set()
+            codes_u = []
+            for c in codes:
+                cu = str(c).upper().strip()
+                if not cu or cu in seen:
+                    continue
+                seen.add(cu)
+                codes_u.append(cu)
             max_i = int(st.session_state.get("intraday_max_tickers") or 50)
             if max_i < 1:
                 max_i = 50
@@ -1123,6 +1137,78 @@ with tab_stocks:
                     analysis = analyze_breakout(t, df, name)
                 if analysis:
                     data_rows.append(analysis)
+                elif breakout_model in {"v3", "v3tv"} and bool(st.session_state.get("v3_show_watchlist_all")):
+                    try:
+                        from ta.momentum import RSIIndicator
+                        rsi_v = RSIIndicator(df["Close"], window=14).rsi().iloc[-1]
+                        rsi_v = float(rsi_v) if pd.notna(rsi_v) else 50.0
+                    except Exception:
+                        rsi_v = 50.0
+                    try:
+                        last_close = float(df["Close"].iloc[-1])
+                    except Exception:
+                        last_close = None
+                    breakout_level = None
+                    try:
+                        closes = pd.to_numeric(df["Close"], errors="coerce").dropna()
+                        if len(closes) >= 60:
+                            breakout_level = float(closes.iloc[-55:-1].max())
+                    except Exception:
+                        breakout_level = None
+                    live_px = None
+                    if breakout_model == "v3tv":
+                        try:
+                            code = str(t).upper().strip().split(".")[0]
+                            q = (quote_map or {}).get(code) if quote_map is not None else None
+                            if isinstance(q, dict) and q.get("ld") is not None:
+                                live_px = float(q.get("ld"))
+                        except Exception:
+                            live_px = None
+                    px = live_px if (live_px is not None) else last_close
+                    is_breakout = False
+                    runup_pct = None
+                    try:
+                        if px is not None and breakout_level is not None and float(px) > float(breakout_level) and float(breakout_level) > 0:
+                            is_breakout = True
+                            runup_pct = ((float(px) / float(breakout_level)) - 1.0) * 100.0
+                    except Exception:
+                        is_breakout = False
+                        runup_pct = None
+                    try:
+                        _, resolved_name, sector, insight, catalyst = _core._resolve_insight_v3(str(t), name)
+                    except Exception:
+                        resolved_name = name or str(t)
+                        sector = ""
+                        insight = ""
+                        catalyst = ""
+                    data_rows.append({
+                        "ticker": str(t),
+                        "name": str(resolved_name or str(t)),
+                        "sector": str(sector or ""),
+                        "price": float(px) if px is not None else 0.0,
+                        "rsi": float(rsi_v),
+                        "score": 0,
+                        "score_max": 7,
+                        "breakout_55": bool(is_breakout),
+                        "breakout_candle": False,
+                        "breakout_candle_valid": False,
+                        "breakout_hold_ok": None,
+                        "runup_pct": runup_pct,
+                        "max_runup_pct": st.session_state.v3_max_runup_pct,
+                        "max_pullback_pct": st.session_state.v3_max_pullback_pct,
+                        "retest_days": st.session_state.v3_retest_days,
+                        "retest_confirmed": False,
+                        "breakout_candle_date": "",
+                        "breakout_candle_age": None,
+                        "breakout_level": breakout_level,
+                        "power_candle": None,
+                        "volume_spike": None,
+                        "liquidity_ok": True,
+                        "analysis": str(insight or "Watchlist item (no V3 signal yet)."),
+                        "catalyst": str(catalyst or ""),
+                        "watch_only": True,
+                        "model": "v3tv" if breakout_model == "v3tv" else "v3",
+                    })
 
     if data_rows:
         if breakout_model in {"v3", "v3tv"} and st.session_state.get("v3_filter_note"):
@@ -1241,7 +1327,9 @@ with tab_stocks:
             score_max = int(r.get("score_max", 5))
             score_val = int(r.get("score", 0))
 
-            if breakout_model in {"v3", "v3tv"}:
+            if r.get("watch_only"):
+                status = "👀 WATCH"
+            elif breakout_model in {"v3", "v3tv"}:
                 if r.get("retest_confirmed"):
                     status = "🔥 STRONG"
                 elif r.get("breakout_candle_valid"):
@@ -1253,6 +1341,11 @@ with tab_stocks:
             else:
                 status = "🔥 STRONG" if score_val >= strong_threshold else ("⚖️ NEUTRAL" if score_val >= neutral_threshold else "❄️ WEAK")
 
+            if r.get("watch_only") and (not bool(r.get("breakout_55"))):
+                signal_text = "👀 WATCH"
+            else:
+                signal_text = "✅ CONFIRMED" if r.get("retest_confirmed") else ("⚡ BREAKOUT" if r.get("breakout_candle_valid") else ("❌ FAILED" if (r.get("breakout_candle") and (r.get("breakout_hold_ok") is False)) else ("⏰ LATE" if r.get("breakout_candle") else ("📈 Breakout" if r.get("breakout_55") else ""))))
+
             display_rows.append({
                 "Ticker": r['ticker'],
                 "Name": linked_name,
@@ -1260,7 +1353,7 @@ with tab_stocks:
                 "Last Price (RM)": f"{float(r['price']):.2f}",
                 "Score": f"{score_val}/{score_max}",
                 "RSI": r['rsi'],
-                "Signal": "✅ CONFIRMED" if r.get("retest_confirmed") else ("⚡ BREAKOUT" if r.get("breakout_candle_valid") else ("❌ FAILED" if (r.get("breakout_candle") and (r.get("breakout_hold_ok") is False)) else ("⏰ LATE" if r.get("breakout_candle") else ("📈 Breakout" if r.get("breakout_55") else "")))),
+                "Signal": signal_text,
                 "Signal Date": r.get("breakout_candle_date", ""),
                 "Retest": "✅" if r.get("retest_confirmed") else ("⏳" if (int(r.get("retest_days") or 0) > 0 and r.get("breakout_candle_valid")) else ""),
                 "Retest Date": r.get("retest_touch_date", ""),
