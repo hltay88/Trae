@@ -1776,7 +1776,7 @@ def analyze_breakout_v3_intraday(ticker: str, daily_df: pd.DataFrame, intraday_d
         "liquidity_ok": True,
         "analysis": analysis,
         "catalyst": catalyst,
-        "model": "v3i",
+        "model": "v3tv",
     }
 
 
@@ -1869,7 +1869,7 @@ def analyze_breakout_v3_quote(ticker: str, daily_df: pd.DataFrame, quote: dict, 
         "liquidity_ok": True,
         "analysis": analysis,
         "catalyst": catalyst,
-        "model": "v3i",
+        "model": "v3tv",
     }
 
 # --- KLCI COMPONENTS (Top 30 Stocks) ---
@@ -2811,8 +2811,6 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
     
     tickers = universe if universe is not None else get_stock_universe(universe_mode)[0]
     try:
-        if m == "v3i" and max_tickers is None:
-            max_tickers = 50
         if m == "v3tv" and max_tickers is None:
             max_tickers = 60
 
@@ -2823,80 +2821,8 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
     except Exception:
         pass
     allow = None
-    if m in {"v3", "v3i", "v3tv"} and sector_allowlist:
+    if m in {"v3", "v3tv"} and sector_allowlist:
         allow = {str(x).strip().lower() for x in sector_allowlist if str(x).strip()}
-
-    if m == "v3i":
-        token = _get_itick_token()
-        if not token:
-            return []
-
-        def _chunks(seq, size: int):
-            out = []
-            buf = []
-            for x in seq:
-                buf.append(x)
-                if len(buf) >= size:
-                    out.append(buf)
-                    buf = []
-            if buf:
-                out.append(buf)
-            return out
-
-        for batch in _chunks(list(tickers), 10):
-            daily_map: dict[str, tuple[pd.DataFrame, str]] = {}
-            codes = []
-            for ticker in batch:
-                if allow:
-                    t = str(ticker).upper().strip()
-                    code = t.split(".")[0]
-                    insight = MARKET_INSIGHTS.get(t)
-                    if not insight:
-                        for _, v in MARKET_INSIGHTS.items():
-                            if v.get("code") == code:
-                                insight = v
-                                break
-                    sector = insight.get("sector") if insight else None
-                    if sector and str(sector).strip().lower() not in allow:
-                        continue
-
-                df, resolved_name = get_stock_data(ticker, period="1y")
-                if df is None or df.empty:
-                    continue
-                t = str(ticker).upper().strip()
-                code = t.split(".")[0]
-                daily_map[code] = (df, resolved_name)
-                codes.append(code)
-
-            if not codes:
-                continue
-
-            intramap = _itick_stock_klines(codes, ktype=2, limit=160, region=None)
-            for code, (dfd, resolved_name) in daily_map.items():
-                intra = intramap.get(code)
-                if intra is None or intra.empty:
-                    continue
-                ticker_full = f"{code}.KL" if (code.isdigit() and len(code) == 4) else code
-                analysis = analyze_breakout_v3_intraday(
-                    ticker_full,
-                    dfd,
-                    intra,
-                    resolved_name=resolved_name,
-                    max_runup_pct=max_runup_pct,
-                    min_intraday_bars=40,
-                )
-                if analysis:
-                    all_results.append(analysis)
-
-        all_results.sort(
-            key=lambda x: (
-                bool(x.get("breakout_candle_valid")),
-                int(x.get("score", 0)),
-                -float(x.get("runup_pct", 0.0) or 0.0),
-            ),
-            reverse=True,
-        )
-        return all_results[:limit]
     if m == "v3tv":
         for ticker in tickers:
             if allow:

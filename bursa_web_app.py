@@ -28,7 +28,6 @@ get_stock_data = _core.get_stock_data
 analyze_breakout = _core.analyze_breakout
 analyze_breakout_v2 = _core.analyze_breakout_v2
 analyze_breakout_v3 = _core.analyze_breakout_v3
-analyze_breakout_v3_intraday = getattr(_core, "analyze_breakout_v3_intraday", None)
 analyze_breakout_v3_quote = getattr(_core, "analyze_breakout_v3_quote", None)
 search_bursa = _core.search_bursa
 get_top_breakouts = _core.get_top_breakouts
@@ -493,12 +492,12 @@ if 'watchlist' not in st.session_state:
             limit=20,
             model=st.session_state.breakout_model,
             universe_mode=st.session_state.universe_mode,
-            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i", "v3tv"} else None,
+            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
             signal_lookback=st.session_state.v3_signal_lookback,
             max_runup_pct=st.session_state.v3_max_runup_pct,
             max_pullback_pct=st.session_state.v3_max_pullback_pct,
             retest_days=st.session_state.v3_retest_days,
-            max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model in {"v3i", "v3tv"} else None)),
+            max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
         )
         if top_breakouts:
             st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
@@ -554,12 +553,12 @@ if not popup_mode:
                 limit=20,
                 model=st.session_state.breakout_model,
                 universe_mode=st.session_state.universe_mode,
-                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i", "v3tv"} else None,
+                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
                 signal_lookback=st.session_state.v3_signal_lookback,
                 max_runup_pct=st.session_state.v3_max_runup_pct,
                 max_pullback_pct=st.session_state.v3_max_pullback_pct,
                 retest_days=st.session_state.v3_retest_days,
-                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model in {"v3i", "v3tv"} else None)),
+                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
             )
             if top_breakouts:
                 st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
@@ -628,7 +627,7 @@ if not popup_mode:
                         limit=20,
                         model=st.session_state.breakout_model,
                         universe_mode=st.session_state.universe_mode,
-                        sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i", "v3tv"} else None,
+                        sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
                         signal_lookback=st.session_state.v3_signal_lookback,
                         max_runup_pct=st.session_state.v3_max_runup_pct,
                         max_pullback_pct=st.session_state.v3_max_pullback_pct,
@@ -649,7 +648,7 @@ if not popup_mode:
                     limit=20,
                     model=st.session_state.breakout_model,
                     universe_mode=st.session_state.universe_mode,
-                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i", "v3tv"} else None,
+                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
                     signal_lookback=st.session_state.v3_signal_lookback,
                     max_runup_pct=st.session_state.v3_max_runup_pct,
                     max_pullback_pct=st.session_state.v3_max_pullback_pct,
@@ -667,14 +666,12 @@ if not popup_mode:
 
     model_label = st.sidebar.radio(
         "Breakout Model",
-        ["Breakout Candle (V3)", "Intraday (No Token) (V3tv)", "Intraday Breakout (V3i)", "Stronger (V2)", "Original (V1)"],
-        index=0 if st.session_state.breakout_model == "v3" else (1 if st.session_state.breakout_model == "v3tv" else (2 if st.session_state.breakout_model == "v3i" else (3 if st.session_state.breakout_model == "v2" else 4))),
+        ["Breakout Candle (V3)", "Intraday (No Token) (V3tv)", "Stronger (V2)", "Original (V1)"],
+        index=0 if st.session_state.breakout_model == "v3" else (1 if st.session_state.breakout_model == "v3tv" else (2 if st.session_state.breakout_model == "v2" else 3)),
         horizontal=True,
     )
     if model_label.startswith("Intraday (No Token)"):
         selected_model = "v3tv"
-    elif model_label.startswith("Intraday Breakout"):
-        selected_model = "v3i"
     else:
         selected_model = "v3" if model_label.startswith("Breakout") else ("v2" if model_label.startswith("Stronger") else "v1")
     if selected_model != st.session_state.breakout_model:
@@ -684,12 +681,12 @@ if not popup_mode:
                 limit=20,
                 model=st.session_state.breakout_model,
                 universe_mode=st.session_state.universe_mode,
-                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i", "v3tv"} else None,
+                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
                 signal_lookback=st.session_state.v3_signal_lookback,
                 max_runup_pct=st.session_state.v3_max_runup_pct,
                 max_pullback_pct=st.session_state.v3_max_pullback_pct,
                 retest_days=st.session_state.v3_retest_days,
-                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model in {"v3i", "v3tv"} else None)),
+                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
             )
             if top_breakouts:
                 st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
@@ -698,7 +695,7 @@ if not popup_mode:
                 st.session_state.watchlist = list(fallback_universe[:20])
         st.rerun()
 
-    if st.session_state.breakout_model in {"v3i", "v3tv"}:
+    if st.session_state.breakout_model == "v3tv":
         if "intraday_max_tickers" not in st.session_state:
             st.session_state.intraday_max_tickers = 50
         st.session_state.intraday_max_tickers = st.sidebar.slider(
@@ -707,35 +704,12 @@ if not popup_mode:
             max_value=200,
             value=int(st.session_state.intraday_max_tickers),
             step=10,
-            help="Intraday scanning may use iTick (V3i) or TradingView last-price (V3tv). Keep this smaller to reduce rate limits.",
+            help="V3tv uses TradingView last price (no token). Keep this smaller to reduce rate limits.",
         )
-        if st.session_state.breakout_model == "v3tv":
-            st.sidebar.caption("V3tv uses TradingView last price (no token). Results depend on TradingView availability in your environment.")
-        else:
-            if "ITICK_TOKEN" not in st.session_state:
-                st.session_state.ITICK_TOKEN = ""
-            st.sidebar.text_input(
-                "ITICK_TOKEN",
-                key="ITICK_TOKEN",
-                type="password",
-                help="Paste your iTick API Key here. For permanent use, set ITICK_TOKEN in Streamlit Secrets / environment variables.",
-            )
-            try:
-                import bursa_core as _core
-                if not _core.itick_enabled():
-                    if not _core.itick_enabled():
-                        st.sidebar.error("Missing ITICK_TOKEN. Add it in your environment/secrets (or paste above) to enable intraday scan.")
-                else:
-                    try:
-                        tok_len = len(str(_core._get_itick_token() or ""))
-                        st.sidebar.caption(f"iTick token detected (length {tok_len}).")
-                    except Exception:
-                        pass
-            except Exception:
-                st.sidebar.error("Missing ITICK_TOKEN. Add it in your environment/secrets to enable intraday scan.")
+        st.sidebar.caption("V3tv uses TradingView last price (no token). Results depend on TradingView availability in your environment.")
 
 
-    if st.session_state.breakout_model in {"v3", "v3i", "v3tv"}:
+    if st.session_state.breakout_model in {"v3", "v3tv"}:
         if "v3_entry_style" not in st.session_state:
             st.session_state.v3_entry_style = "Early Entry"
         if "v3_signal_filter" not in st.session_state:
@@ -811,7 +785,7 @@ if not popup_mode:
                     st.session_state.v3_retest_days = 0
 
             with st.spinner("Applying entry style..."):
-                if st.session_state.breakout_model in {"v3i", "v3tv"}:
+                if st.session_state.breakout_model == "v3tv":
                     scan_limit = 20
                 else:
                     scan_limit = 9999 if st.session_state.v3_signal_filter in {"late", "failed"} else 20
@@ -824,7 +798,7 @@ if not popup_mode:
                     max_runup_pct=st.session_state.v3_max_runup_pct,
                     max_pullback_pct=st.session_state.v3_max_pullback_pct,
                     retest_days=st.session_state.v3_retest_days,
-                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model in {"v3i", "v3tv"} else None)),
+                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
                 )
                 if st.session_state.v3_signal_filter in {"late", "failed"}:
                     filtered = []
@@ -949,7 +923,7 @@ if not popup_mode:
                         max_runup_pct=st.session_state.v3_max_runup_pct,
                         max_pullback_pct=st.session_state.v3_max_pullback_pct,
                         retest_days=st.session_state.v3_retest_days,
-                        max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model in {"v3i", "v3tv"} else None)),
+                        max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
                     )
                     st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
 
@@ -967,12 +941,12 @@ if not popup_mode:
                     limit=20,
                     model=st.session_state.breakout_model,
                     universe_mode=st.session_state.universe_mode,
-                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i"} else None,
+                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
                     signal_lookback=st.session_state.v3_signal_lookback,
                     max_runup_pct=st.session_state.v3_max_runup_pct,
                     max_pullback_pct=st.session_state.v3_max_pullback_pct,
                     retest_days=st.session_state.v3_retest_days,
-                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model in {"v3i", "v3tv"} else None)),
+                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
                 )
                 st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
             st.rerun()
@@ -983,12 +957,12 @@ if not popup_mode:
                 limit=20,
                 model=st.session_state.breakout_model,
                 universe_mode=st.session_state.universe_mode,
-                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i"} else None,
+                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
                 signal_lookback=st.session_state.v3_signal_lookback,
                 max_runup_pct=st.session_state.v3_max_runup_pct,
                 max_pullback_pct=st.session_state.v3_max_pullback_pct,
                 retest_days=st.session_state.v3_retest_days,
-                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model in {"v3i", "v3tv"} else None)),
+                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
             )
             if top_breakouts:
                 st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
@@ -1045,12 +1019,12 @@ if not popup_mode:
             limit=20,
             model=st.session_state.breakout_model,
             universe_mode=st.session_state.universe_mode,
-            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3i", "v3tv"} else None,
+            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
             signal_lookback=st.session_state.v3_signal_lookback,
             max_runup_pct=st.session_state.v3_max_runup_pct,
             max_pullback_pct=st.session_state.v3_max_pullback_pct,
             retest_days=st.session_state.v3_retest_days,
-            max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model in {"v3i", "v3tv"} else None)),
+            max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
         )
         st.session_state.watchlist = [res['ticker'] for res in top_breakouts]
         st.rerun()
@@ -1070,72 +1044,10 @@ with tab_stocks:
         except Exception:
             benchmark_df = None
 
-    intraday_map = None
     quote_map = None
     intraday_attempted = 0
-    intraday_success = 0
     quote_success = 0
-    if breakout_model == "v3i":
-        try:
-            import bursa_core as _core
-            if not _core.itick_enabled():
-                st.error("Intraday model requires ITICK_TOKEN. Add it in your environment/secrets and refresh.")
-                st.stop()
-        except Exception:
-            pass
-        try:
-            import bursa_core as _core
-            codes = []
-            for t in st.session_state.watchlist:
-                if "=F" in str(t):
-                    continue
-                code = str(t).upper().strip().split(".")[0]
-                if code:
-                    codes.append(code)
-            codes_u = sorted(set(codes))
-            max_i = int(st.session_state.get("intraday_max_tickers") or 50)
-            if max_i < 1:
-                max_i = 50
-            req_codes = codes_u[:max_i]
-            intraday_attempted = len(req_codes)
-            intraday_map = _core._itick_stock_klines(req_codes, ktype=2, limit=160, region=None)
-            intraday_success = sum(1 for _, dfi in (intraday_map or {}).items() if dfi is not None and not dfi.empty)
-        except Exception:
-            intraday_map = {}
-            intraday_success = 0
-        if intraday_attempted > 0 and intraday_success == 0:
-            try:
-                quote_map = _core._itick_stock_quotes(req_codes, region=None)
-                quote_success = sum(1 for _, q in (quote_map or {}).items() if isinstance(q, dict) and q.get("ld") is not None)
-            except Exception:
-                quote_map = {}
-                quote_success = 0
-
-        if intraday_attempted > 0 and intraday_success == 0 and quote_success == 0:
-            try:
-                probe_k = _core.itick_probe_stock_klines((req_codes or ["1155"])[0], region=None, ktype=2, limit=5)
-                probe_q = _core.itick_probe_stock_quotes((req_codes or ["1155"])[0], region=None)
-                attempts_k = probe_k.get("attempts") or []
-                attempts_q = probe_q.get("attempts") or []
-                auths_k = ",".join([str(a.get("auth")) for a in attempts_k if isinstance(a, dict) and a.get("auth")])
-                auths_q = ",".join([str(a.get("auth")) for a in attempts_q if isinstance(a, dict) and a.get("auth")])
-                st.error(
-                    f"iTick returned no intraday data. "
-                    f"Klines HTTP={probe_k.get('http_status')}, api_code={probe_k.get('api_code')}, msg={probe_k.get('msg')}, auth={probe_k.get('auth_header')}. "
-                    f"Quotes HTTP={probe_q.get('http_status')}, api_code={probe_q.get('api_code')}, msg={probe_q.get('msg')}, auth={probe_q.get('auth_header')}."
-                )
-                if probe_k.get("http_status") == 401 or probe_q.get("http_status") == 401:
-                    st.info(f"401 Unauthorized from iTick. Tried auth headers: klines={auths_k or 'n/a'}, quotes={auths_q or 'n/a'}. Your API Key is invalid/expired or pasted with whitespace/newlines. Use the copy button on iTick dashboard, or click Renew and paste again.")
-            except Exception:
-                st.error("iTick returned no intraday data for this watchlist. Check your iTick plan supports MY stocks (klines/quotes), then retry.")
-            st.stop()
-
-        if intraday_attempted > 0:
-            if intraday_success > 0:
-                st.caption(f"Intraday bars: {intraday_success}/{intraday_attempted} tickers returned 5-minute bars.")
-            else:
-                st.caption(f"Intraday bars: 0/{intraday_attempted}. Using real-time quotes instead (no 5-minute bars).")
-    elif breakout_model == "v3tv":
+    if breakout_model == "v3tv":
         try:
             import bursa_core as _core
             codes = []
@@ -1192,33 +1104,6 @@ with tab_stocks:
                         max_pullback_pct=st.session_state.v3_max_pullback_pct,
                         retest_days=st.session_state.v3_retest_days,
                     )
-                elif breakout_model == "v3i":
-                    code = str(t).upper().strip().split(".")[0]
-                    intra = (intraday_map or {}).get(code) if intraday_map is not None else None
-                    if intra is not None and (not intra.empty):
-                        if analyze_breakout_v3_intraday is None:
-                            analysis = None
-                        else:
-                            analysis = analyze_breakout_v3_intraday(
-                                t,
-                                df,
-                                intra,
-                                resolved_name=name,
-                                max_runup_pct=st.session_state.v3_max_runup_pct,
-                                min_intraday_bars=40,
-                            )
-                    else:
-                        q = (quote_map or {}).get(code) if quote_map is not None else None
-                        if analyze_breakout_v3_quote is None:
-                            analysis = None
-                        else:
-                            analysis = analyze_breakout_v3_quote(
-                                t,
-                                df,
-                                q,
-                                resolved_name=name,
-                                max_runup_pct=st.session_state.v3_max_runup_pct,
-                            )
                 elif breakout_model == "v3tv":
                     code = str(t).upper().strip().split(".")[0]
                     q = (quote_map or {}).get(code) if quote_map is not None else None
@@ -1240,10 +1125,10 @@ with tab_stocks:
                     data_rows.append(analysis)
 
     if data_rows:
-        if breakout_model in {"v3", "v3i", "v3tv"} and st.session_state.get("v3_filter_note"):
+        if breakout_model in {"v3", "v3tv"} and st.session_state.get("v3_filter_note"):
             st.info(str(st.session_state.get("v3_filter_note")))
 
-        if breakout_model in {"v3", "v3i", "v3tv"}:
+        if breakout_model in {"v3", "v3tv"}:
             sig_filter = str(st.session_state.get("v3_signal_filter", "all") or "all").lower().strip()
             original_rows = list(data_rows)
             filtered = data_rows
@@ -1315,7 +1200,7 @@ with tab_stocks:
             st.stop()
 
         # Top Metrics
-        if breakout_model in {"v3", "v3i"}:
+        if breakout_model in {"v3", "v3tv"}:
             strong_threshold = 8
             neutral_threshold = 5
             total_breakouts = len([r for r in data_rows if bool(r.get("retest_confirmed")) or bool(r.get("breakout_candle_valid"))])
@@ -1356,7 +1241,7 @@ with tab_stocks:
             score_max = int(r.get("score_max", 5))
             score_val = int(r.get("score", 0))
 
-            if breakout_model in {"v3", "v3i", "v3tv"}:
+            if breakout_model in {"v3", "v3tv"}:
                 if r.get("retest_confirmed"):
                     status = "🔥 STRONG"
                 elif r.get("breakout_candle_valid"):
@@ -1388,7 +1273,7 @@ with tab_stocks:
         st.caption("Tip: click the stock name to open its chart in a new window/tab.")
         st.markdown(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
     else:
-        if breakout_model in {"v3i", "v3tv"}:
+        if breakout_model == "v3tv":
             st.warning("No intraday breakout signals found for the current watchlist and filters.")
         else:
             st.warning("No data found. Please click 'Refresh Market Discovery' or add valid tickers.")
