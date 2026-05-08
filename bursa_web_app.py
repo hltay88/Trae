@@ -345,9 +345,9 @@ if not popup_mode:
             import bursa_core as _core
             st.session_state.klci_auto_update = st.sidebar.checkbox("Auto-update index constituents", value=bool(st.session_state.klci_auto_update))
             st.session_state.index_force_refresh = st.sidebar.checkbox(
-                "Force refresh (no cache)",
+                "Force refresh index list (no cache)",
                 value=bool(st.session_state.index_force_refresh),
-                help="When enabled, index constituents are fetched from the source each run (slower).",
+                help="Bypasses cached index constituents and fetches from the source each run (slower). If the source is blocked, the app falls back to the last cached list.",
             )
             _core.KLCI_AUTO_UPDATE_ENABLED = bool(st.session_state.klci_auto_update)
             _core.INDEX_AUTO_UPDATE_ENABLED = bool(st.session_state.klci_auto_update)

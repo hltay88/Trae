@@ -1715,6 +1715,16 @@ def refresh_index_components(index_key: str, force: bool = False, max_age_days: 
 
     cache_file = os.path.join(INDEX_COMPONENTS_CACHE_DIR, f"{key}.txt")
 
+    cached_any = []
+    if os.path.exists(cache_file):
+        try:
+            cached_any = [_normalize_kl_ticker(x) for x in _read_text_lines(cache_file)]
+            cached_any = sorted({x for x in cached_any if x})
+            if not (defs[key]["min"] <= len(cached_any) <= defs[key]["max"]):
+                cached_any = []
+        except Exception:
+            cached_any = []
+
     try:
         if not force and os.path.exists(cache_file):
             try:
@@ -1732,8 +1742,12 @@ def refresh_index_components(index_key: str, force: bool = False, max_age_days: 
         if defs[key]["min"] <= len(resolved) <= defs[key]["max"]:
             _write_text_lines(cache_file, [t.replace(".KL", "") for t in resolved])
             return resolved, "investingmalaysia"
+        if cached_any:
+            return cached_any, "cache-fallback"
         return [], "investingmalaysia"
     except Exception:
+        if cached_any:
+            return cached_any, "cache-fallback"
         return [], "error"
 
 
