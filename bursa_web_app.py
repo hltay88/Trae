@@ -1135,6 +1135,7 @@ with tab_stocks:
                     analysis = analyze_breakout_v2(t, df, name, benchmark_df=benchmark_df, min_rows=min(120, len(df)))
                 else:
                     analysis = analyze_breakout(t, df, name)
+
                 if analysis:
                     data_rows.append(analysis)
                 elif breakout_model in {"v3", "v3tv"} and bool(st.session_state.get("v3_show_watchlist_all")):
@@ -1207,8 +1208,55 @@ with tab_stocks:
                         "analysis": str(insight or "Watchlist item (no V3 signal yet)."),
                         "catalyst": str(catalyst or ""),
                         "watch_only": True,
+                        "data_ok": True,
                         "model": "v3tv" if breakout_model == "v3tv" else "v3",
                     })
+            elif breakout_model in {"v3", "v3tv"} and bool(st.session_state.get("v3_show_watchlist_all")):
+                try:
+                    _, resolved_name, sector, insight, catalyst = _core._resolve_insight_v3(str(t), None)
+                except Exception:
+                    resolved_name = str(t)
+                    sector = ""
+                    insight = ""
+                    catalyst = ""
+                live_px = None
+                if breakout_model == "v3tv":
+                    try:
+                        code = str(t).upper().strip().split(".")[0]
+                        q = (quote_map or {}).get(code) if quote_map is not None else None
+                        if isinstance(q, dict) and q.get("ld") is not None:
+                            live_px = float(q.get("ld"))
+                    except Exception:
+                        live_px = None
+                data_rows.append({
+                    "ticker": str(t),
+                    "name": str(resolved_name or str(t)),
+                    "sector": str(sector or ""),
+                    "price": float(live_px) if live_px is not None else 0.0,
+                    "rsi": 50.0,
+                    "score": 0,
+                    "score_max": 7,
+                    "breakout_55": False,
+                    "breakout_candle": False,
+                    "breakout_candle_valid": False,
+                    "breakout_hold_ok": None,
+                    "runup_pct": None,
+                    "max_runup_pct": st.session_state.v3_max_runup_pct,
+                    "max_pullback_pct": st.session_state.v3_max_pullback_pct,
+                    "retest_days": st.session_state.v3_retest_days,
+                    "retest_confirmed": False,
+                    "breakout_candle_date": "",
+                    "breakout_candle_age": None,
+                    "breakout_level": None,
+                    "power_candle": None,
+                    "volume_spike": None,
+                    "liquidity_ok": None,
+                    "analysis": "No daily price data for this ticker right now (data source blocked or ticker not found).",
+                    "catalyst": str(catalyst or ""),
+                    "watch_only": True,
+                    "data_ok": False,
+                    "model": "v3tv" if breakout_model == "v3tv" else "v3",
+                })
 
     if data_rows:
         if breakout_model in {"v3", "v3tv"} and st.session_state.get("v3_filter_note"):
@@ -1217,7 +1265,8 @@ with tab_stocks:
         if breakout_model in {"v3", "v3tv"}:
             sig_filter = str(st.session_state.get("v3_signal_filter", "all") or "all").lower().strip()
             original_rows = list(data_rows)
-            filtered = data_rows
+            watch_rows = [r for r in data_rows if bool(r.get("watch_only"))] if bool(st.session_state.get("v3_show_watchlist_all")) else []
+            filtered = [r for r in data_rows if not bool(r.get("watch_only"))]
             if sig_filter in {"late", "failed"}:
                 tmp = []
                 for r in filtered:
@@ -1274,6 +1323,9 @@ with tab_stocks:
                     if age_i is not None and age_i <= 1:
                         tmp.append(r)
                 filtered = tmp
+
+            if watch_rows:
+                filtered = watch_rows + filtered
 
             if not filtered:
                 st.warning("No matching rows for the selected V3 filter. Showing the full list instead.")

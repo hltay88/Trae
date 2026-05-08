@@ -2990,6 +2990,20 @@ def search_bursa(query):
         pass
 
     try:
+        for k, v in MARKET_INSIGHTS.items():
+            code = str(v.get("code") or "").strip().upper()
+            name = str(v.get("name") or "").strip().upper()
+            if not name:
+                continue
+            parts = [p for p in re.split(r"[^A-Z0-9]+", name) if p]
+            if query_upper in parts:
+                return str(k).upper().strip()
+            if query_upper == name.replace(" ", ""):
+                return str(k).upper().strip()
+    except Exception:
+        pass
+
+    try:
         url = "https://query2.finance.yahoo.com/v1/finance/search"
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers, params={"q": query_upper, "quotesCount": 10}, timeout=15).json()
