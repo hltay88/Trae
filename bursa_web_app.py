@@ -204,6 +204,33 @@ def _autologin_redirect_if_cookie_present() -> None:
         pass
 
 
+def _set_query_params(**kwargs) -> None:
+    try:
+        qp = {}
+        for k, v in kwargs.items():
+            if v is None:
+                continue
+            qp[str(k)] = str(v)
+        try:
+            st.query_params.clear()
+            for k, v in qp.items():
+                st.query_params[k] = v
+        except Exception:
+            st.experimental_set_query_params(**qp)
+    except Exception:
+        return
+
+
+def _clear_query_params() -> None:
+    try:
+        try:
+            st.query_params.clear()
+        except Exception:
+            st.experimental_set_query_params()
+    except Exception:
+        return
+
+
 def _require_login(popup_mode: bool) -> None:
     expected_user = _get_secret_value("APP_USERNAME")
     expected_pw = _get_secret_value("APP_PASSWORD")
@@ -498,7 +525,7 @@ a:hover { text-decoration: underline; }
     unsafe_allow_html=True,
 )
 
-# Chart view (opened from table clicks)
+# Chart view
 if chart_symbol:
     display_name = None
     try:
@@ -516,10 +543,12 @@ if chart_symbol:
     st.markdown(
         header,
     )
-    st.caption("This is an in-app chart view. Use the link below to return to the dashboard.")
+    st.caption("This is an in-app chart view.")
     with st.spinner(f"Loading chart for {chart_symbol}..."):
         _render_chart(chart_symbol)
-    st.markdown("[Back to Dashboard](/)")
+    if st.button("Back to Dashboard", use_container_width=True):
+        _clear_query_params()
+        st.rerun()
     st.stop()
 
 # Initialize session state for watchlist
@@ -700,6 +729,17 @@ if not popup_mode:
             st.rerun()
     if st.session_state.universe_mode == "file":
         st.sidebar.caption("Universe source: bursa_universe.csv in the app folder. Put one 4-digit stock code per line (Main + ACE). Example: 6742 or 6742.KL.")
+
+    st.sidebar.markdown("---")
+    try:
+        wl = [str(x).upper().strip() for x in (st.session_state.get("watchlist") or []) if str(x).strip()]
+    except Exception:
+        wl = []
+    if wl:
+        sel = st.sidebar.selectbox("Open Chart", wl, index=0)
+        if st.sidebar.button("Show Chart", use_container_width=True):
+            _set_query_params(chart=str(sel))
+            st.rerun()
 
     model_label = st.sidebar.radio(
         "Breakout Model",
@@ -1379,8 +1419,7 @@ with tab_stocks:
         # Prepare display dataframe
         display_rows = []
         for r in data_rows:
-            link = f"?chart={quote(r['ticker'])}"
-            linked_name = f'<a href="{link}" target="_self" rel="noopener noreferrer">{r["name"]}</a>'
+            linked_name = str(r.get("name") or "")
             score_max = int(r.get("score_max", 5))
             score_val = int(r.get("score", 0))
 
@@ -1437,8 +1476,7 @@ with tab_futures:
     if futures_data:
         futures_display = []
         for r in futures_data:
-            link = f"?chart={quote(r['ticker'])}"
-            linked_name = f'<a href="{link}" target="_self" rel="noopener noreferrer">{r["name"]}</a>'
+            linked_name = str(r.get("name") or "")
             futures_display.append({
                 "Future Contract": linked_name,
                 "Ticker": r['ticker'],
