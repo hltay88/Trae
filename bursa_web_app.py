@@ -17,6 +17,8 @@ import time
 import os
 import hashlib
 import hmac
+import base64
+import json
 from urllib.parse import quote
 import streamlit.components.v1 as components
 import bursa_core as _core
@@ -62,6 +64,60 @@ def _sha256_hex(s: str) -> str:
     return hashlib.sha256(str(s).encode("utf-8")).hexdigest()
 
 
+def _auth_secret() -> str:
+    v = _get_secret_value("APP_AUTH_SECRET")
+    if v:
+        return str(v)
+    v = _get_secret_value("APP_PASSWORD")
+    if v:
+        return str(v)
+    v = _get_secret_value("APP_PASSWORD_SHA256")
+    if v:
+        return str(v)
+    v = _get_secret_value("APP_USERNAME")
+    if v:
+        return str(v)
+    return "change-me"
+
+
+def _b64url_encode(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).decode("utf-8").rstrip("=")
+
+
+def _b64url_decode(s: str) -> bytes:
+    pad = "=" * ((4 - (len(s) % 4)) % 4)
+    return base64.urlsafe_b64decode((s or "") + pad)
+
+
+def _make_auth_token(username: str, ttl_seconds: int = 12 * 3600) -> str:
+    payload = {"u": str(username or "").strip(), "exp": int(time.time()) + int(ttl_seconds)}
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    p = _b64url_encode(raw)
+    sig = hmac.new(_auth_secret().encode("utf-8"), p.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{p}.{sig}"
+
+
+def _verify_auth_token(token: str) -> str | None:
+    try:
+        t = str(token or "").strip()
+        if not t or "." not in t:
+            return None
+        p, sig = t.split(".", 1)
+        expected = hmac.new(_auth_secret().encode("utf-8"), p.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(str(sig), str(expected)):
+            return None
+        payload = json.loads(_b64url_decode(p).decode("utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        exp = int(payload.get("exp") or 0)
+        if exp <= int(time.time()):
+            return None
+        u = str(payload.get("u") or "").strip()
+        return u if u else None
+    except Exception:
+        return None
+
+
 def _require_login(popup_mode: bool) -> None:
     expected_user = _get_secret_value("APP_USERNAME")
     expected_pw = _get_secret_value("APP_PASSWORD")
@@ -74,13 +130,25 @@ def _require_login(popup_mode: bool) -> None:
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
+    if not st.session_state.authenticated:
+        u_from_token = _verify_auth_token(_get_query_param("auth"))
+        if u_from_token:
+            st.session_state.authenticated = True
+            st.session_state.auth_user = u_from_token
+
     if st.session_state.authenticated:
+        try:
+            if not st.session_state.get("auth_token") and st.session_state.get("auth_user"):
+                st.session_state.auth_token = _make_auth_token(st.session_state.get("auth_user"))
+        except Exception:
+            pass
         if not popup_mode:
             try:
                 with st.sidebar:
                     if st.button("Logout", use_container_width=True):
                         st.session_state.authenticated = False
                         st.session_state.auth_user = None
+                        st.session_state.auth_token = None
                         st.rerun()
             except Exception:
                 pass
@@ -101,6 +169,7 @@ def _require_login(popup_mode: bool) -> None:
         if ok_user and ok_pw:
             st.session_state.authenticated = True
             st.session_state.auth_user = str(u or "").strip()
+            st.session_state.auth_token = _make_auth_token(st.session_state.auth_user)
             st.rerun()
         else:
             st.error("Invalid username or password.")
@@ -361,7 +430,14 @@ if chart_symbol:
     st.caption("This is an in-app chart view. Use the link below to return to the dashboard.")
     with st.spinner(f"Loading chart for {chart_symbol}..."):
         _render_chart(chart_symbol)
-    st.markdown("[Back to Dashboard](/)")
+    try:
+        tok = st.session_state.get("auth_token")
+    except Exception:
+        tok = None
+    if tok:
+        st.markdown(f"[Back to Dashboard](/?auth={quote(str(tok))})")
+    else:
+        st.markdown("[Back to Dashboard](/)")
     st.stop()
 
 # Initialize session state for watchlist
@@ -1220,8 +1296,15 @@ with tab_stocks:
         
         # Prepare display dataframe
         display_rows = []
+        try:
+            auth_tok = st.session_state.get("auth_token")
+        except Exception:
+            auth_tok = None
         for r in data_rows:
-            link = f"?chart={quote(r['ticker'])}&popup=1"
+            if auth_tok:
+                link = f"?chart={quote(r['ticker'])}&popup=1&auth={quote(str(auth_tok))}"
+            else:
+                link = f"?chart={quote(r['ticker'])}&popup=1"
             linked_name = f'<a href="{link}" target="_blank" rel="noopener noreferrer">{r["name"]}</a>'
             score_max = int(r.get("score_max", 5))
             score_val = int(r.get("score", 0))
@@ -1278,8 +1361,15 @@ with tab_futures:
     
     if futures_data:
         futures_display = []
+        try:
+            auth_tok = st.session_state.get("auth_token")
+        except Exception:
+            auth_tok = None
         for r in futures_data:
-            link = f"?chart={quote(r['ticker'])}&popup=1"
+            if auth_tok:
+                link = f"?chart={quote(r['ticker'])}&popup=1&auth={quote(str(auth_tok))}"
+            else:
+                link = f"?chart={quote(r['ticker'])}&popup=1"
             linked_name = f'<a href="{link}" target="_blank" rel="noopener noreferrer">{r["name"]}</a>'
             futures_display.append({
                 "Future Contract": linked_name,
