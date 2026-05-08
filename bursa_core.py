@@ -2813,6 +2813,8 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
     try:
         if m == "v3i" and max_tickers is None:
             max_tickers = 50
+        if m == "v3tv" and max_tickers is None:
+            max_tickers = 60
 
         if max_tickers is not None:
             n = int(max_tickers)
@@ -2821,7 +2823,7 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
     except Exception:
         pass
     allow = None
-    if m in {"v3", "v3i"} and sector_allowlist:
+    if m in {"v3", "v3i", "v3tv"} and sector_allowlist:
         allow = {str(x).strip().lower() for x in sector_allowlist if str(x).strip()}
 
     if m == "v3i":
@@ -2885,6 +2887,56 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
                 )
                 if analysis:
                     all_results.append(analysis)
+
+        all_results.sort(
+            key=lambda x: (
+                bool(x.get("breakout_candle_valid")),
+                int(x.get("score", 0)),
+                -float(x.get("runup_pct", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
+        return all_results[:limit]
+    if m == "v3tv":
+        for ticker in tickers:
+            if allow:
+                t = str(ticker).upper().strip()
+                code = t.split(".")[0]
+                insight = MARKET_INSIGHTS.get(t)
+                if not insight:
+                    for _, v in MARKET_INSIGHTS.items():
+                        if v.get("code") == code:
+                            insight = v
+                            break
+                sector = None
+                if insight:
+                    sector = insight.get("sector")
+                if sector and str(sector).strip().lower() not in allow:
+                    continue
+            df, resolved_name = get_stock_data(ticker, period="1y")
+            if df is None or df.empty:
+                continue
+            try:
+                last_close = float(df["Close"].iloc[-1])
+                if not (last_close > 0.0):
+                    continue
+            except Exception:
+                continue
+
+            live = None
+            try:
+                live = tradingview_last_price_for_ticker_myr(ticker)
+            except Exception:
+                live = None
+            if live is None:
+                continue
+            try:
+                q = {"ld": float(live), "t": int(time.time() * 1000)}
+            except Exception:
+                continue
+            analysis = analyze_breakout_v3_quote(ticker, df, q, resolved_name=resolved_name, max_runup_pct=max_runup_pct)
+            if analysis:
+                all_results.append(analysis)
 
         all_results.sort(
             key=lambda x: (
