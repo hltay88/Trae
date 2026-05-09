@@ -454,6 +454,27 @@ a:hover { text-decoration: underline; }
     unsafe_allow_html=True,
 )
 
+def _notify(kind: str, text: str) -> None:
+    k = str(kind or "info").lower().strip()
+    t = str(text or "")
+    if not t:
+        return
+    if hasattr(st, "toast"):
+        try:
+            icon = "✅" if k == "success" else ("❌" if k == "error" else ("⚠️" if k == "warning" else "ℹ️"))
+            st.toast(t, icon=icon)
+            return
+        except Exception:
+            pass
+    if k == "success":
+        st.success(t)
+    elif k == "error":
+        st.error(t)
+    elif k == "warning":
+        st.warning(t)
+    else:
+        st.info(t)
+
 # Popup/new-tab chart view
 if chart_symbol:
     display_name = None
@@ -473,6 +494,7 @@ if chart_symbol:
         header,
     )
     st.caption("This is an in-app chart view.")
+    st.caption("Tip: add/remove watchlist items from the main dashboard tab (not the chart tab).")
     with st.spinner(f"Loading chart for {chart_symbol}..."):
         _render_chart(chart_symbol)
     try:
@@ -1033,23 +1055,41 @@ if not popup_mode:
 
     st.sidebar.markdown("---")
     st.sidebar.header("➕ Add Custom Stock")
-    new_stock = st.sidebar.text_input("Enter Name, Code or Futures (e.g., GENTING, 0166, FKLI)")
+    new_stock = st.sidebar.text_input(
+        "Enter Name, Code or Futures (e.g., GENTING, 0166, FKLI)",
+        key="add_stock_query",
+    )
     if st.sidebar.button("Add to Watchlist", use_container_width=True):
         ticker = search_bursa(new_stock)
         if ticker:
             manual = _uniq_tickers(st.session_state.get("manual_watchlist") or [])
             t_u = str(ticker).upper().strip()
-            if t_u not in manual:
+            merged = set(_uniq_tickers(st.session_state.get("watchlist") or []))
+            already_pinned = t_u in set(manual)
+            if not already_pinned:
                 manual.append(t_u)
                 st.session_state.manual_watchlist = manual
             _apply_watchlist(st.session_state.get("watchlist") or [])
-            if t_u in st.session_state.watchlist:
-                st.success(f"Added {ticker}!")
-                st.rerun()
+            try:
+                st.session_state.add_stock_query = ""
+            except Exception:
+                pass
+            if already_pinned:
+                _notify("info", f"{ticker} is already in your manual watchlist.")
             else:
-                st.info(f"{ticker} is already in your list.")
+                if t_u in merged:
+                    _notify("success", f"Pinned {ticker} to manual watchlist.")
+                else:
+                    _notify("success", f"Added {ticker} to watchlist.")
         else:
-            st.error("Could not find stock. Try using the exact code (e.g., 5347).")
+            _notify("error", "Could not find stock. Try using the exact code (e.g., 5347).")
+    try:
+        st.sidebar.caption(
+            f"Manual: {len(_uniq_tickers(st.session_state.get('manual_watchlist') or []))} | "
+            f"Total: {len(_uniq_tickers(st.session_state.get('watchlist') or []))}"
+        )
+    except Exception:
+        pass
     if st.sidebar.button("Clear manual watchlist", use_container_width=True):
         st.session_state.manual_watchlist = []
         _apply_watchlist(st.session_state.get("watchlist") or [])
