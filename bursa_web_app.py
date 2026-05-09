@@ -1391,7 +1391,8 @@ with tab_stocks:
                 manual_set2 = set()
             keep_watch_all = bool(st.session_state.get("v3_show_watchlist_all"))
             watch_rows = [r for r in data_rows if bool(r.get("watch_only"))]
-            filtered = [r for r in data_rows if not bool(r.get("watch_only"))]
+            signal_rows = [r for r in data_rows if not bool(r.get("watch_only"))]
+            filtered = list(signal_rows)
             if sig_filter in {"late", "failed"}:
                 tmp = []
                 for r in filtered:
@@ -1450,14 +1451,14 @@ with tab_stocks:
                 filtered = tmp
 
             try:
-                kept = []
-                kept_seen = set()
                 filtered_seen = set()
                 for r in filtered:
                     t0 = str(r.get("ticker") or "").upper().strip()
                     if t0:
                         filtered_seen.add(t0)
-                for r in original_rows:
+                kept = []
+                kept_seen = set()
+                for r in signal_rows:
                     t0 = str(r.get("ticker") or "").upper().strip()
                     if not t0:
                         continue
@@ -1473,8 +1474,21 @@ with tab_stocks:
             except Exception:
                 pass
 
-            if watch_rows:
-                filtered = watch_rows + filtered
+            try:
+                final_rows = []
+                seen_t = set()
+                for r in (watch_rows + filtered):
+                    t0 = str(r.get("ticker") or "").upper().strip()
+                    if not t0:
+                        continue
+                    if t0 in seen_t:
+                        continue
+                    seen_t.add(t0)
+                    final_rows.append(r)
+                filtered = final_rows
+            except Exception:
+                if watch_rows:
+                    filtered = watch_rows + filtered
 
             if not filtered:
                 st.warning("No matching rows for the selected V3 filter. Showing the full list instead.")
