@@ -434,6 +434,8 @@ if "v3_retest_days" not in st.session_state:
     st.session_state.v3_retest_days = 0
 if "max_tickers_scan" not in st.session_state:
     st.session_state.max_tickers_scan = 300
+if "top_results_limit" not in st.session_state:
+    st.session_state.top_results_limit = 20
 
 # --- UI ---
 if not chart_symbol:
@@ -536,8 +538,16 @@ def _apply_watchlist(scanned=None):
 # Initialize session state for watchlist
 if 'watchlist' not in st.session_state:
     with st.spinner("Initializing Market Discovery..."):
+        try:
+            top_n = int(st.session_state.get("top_results_limit") or 20)
+        except Exception:
+            top_n = 20
+        if top_n < 10:
+            top_n = 10
+        if top_n > 200:
+            top_n = 200
         top_breakouts = get_top_breakouts(
-            limit=20,
+            limit=top_n,
             model=st.session_state.breakout_model,
             universe_mode=st.session_state.universe_mode,
             sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
@@ -551,7 +561,7 @@ if 'watchlist' not in st.session_state:
             _apply_watchlist([res['ticker'] for res in top_breakouts])
         else:
             fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
-            _apply_watchlist(list(fallback_universe[:20]))
+            _apply_watchlist(list(fallback_universe[:top_n]))
 
 # Sidebar for adding stocks (hide in popup mode)
 if not popup_mode:
@@ -568,6 +578,41 @@ if not popup_mode:
     st.sidebar.caption(f"Universe loaded: {len(universe_list)} tickers ({universe_src})")
     if universe_src != "file" and st.session_state.universe_mode == "file":
         st.sidebar.warning(f"Could not load {BURSA_UNIVERSE_FILE}. Falling back to curated universe.")
+
+    try:
+        top_n_ui = int(st.session_state.get("top_results_limit") or 20)
+    except Exception:
+        top_n_ui = 20
+    top_n_ui = st.sidebar.slider("Top results (watchlist size)", min_value=10, max_value=100, value=int(top_n_ui), step=10)
+    if int(top_n_ui) != int(st.session_state.get("top_results_limit") or 20):
+        st.session_state.top_results_limit = int(top_n_ui)
+        with st.spinner("Refreshing list for selected top results..."):
+            top_breakouts = get_top_breakouts(
+                limit=int(st.session_state.top_results_limit),
+                model=st.session_state.breakout_model,
+                universe_mode=st.session_state.universe_mode,
+                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
+                signal_lookback=st.session_state.v3_signal_lookback,
+                max_runup_pct=st.session_state.v3_max_runup_pct,
+                max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                retest_days=st.session_state.v3_retest_days,
+                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
+            )
+            if top_breakouts:
+                _apply_watchlist([res['ticker'] for res in top_breakouts])
+            else:
+                fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
+                _apply_watchlist(list(fallback_universe[: int(st.session_state.top_results_limit)]))
+        st.rerun()
+
+    try:
+        top_n = int(st.session_state.get("top_results_limit") or 20)
+    except Exception:
+        top_n = 20
+    if top_n < 10:
+        top_n = 10
+    if top_n > 200:
+        top_n = 200
 
     universe_options = {
         "Focus: Tech + Energy + Banks + Utilities + Infra + Telco (Large/Mid)": "focus",
@@ -598,7 +643,7 @@ if not popup_mode:
         st.session_state.universe_mode = selected_universe
         with st.spinner("Refreshing list for selected universe..."):
             top_breakouts = get_top_breakouts(
-                limit=20,
+                limit=top_n,
                 model=st.session_state.breakout_model,
                 universe_mode=st.session_state.universe_mode,
                 sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
@@ -611,7 +656,7 @@ if not popup_mode:
             if top_breakouts:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
             else:
-                _apply_watchlist(list(universe_list[:20]))
+                _apply_watchlist(list(universe_list[:top_n]))
         st.rerun()
 
     if st.session_state.universe_mode in {"klci", "fbm70", "fbm100", "smallcap"} or str(st.session_state.universe_mode).startswith("sector-"):
@@ -672,7 +717,7 @@ if not popup_mode:
                         _core.refresh_index_components("fbm70", force=True, max_age_days=30)
                         _core.refresh_index_components("fbm100", force=True, max_age_days=30)
                     top_breakouts = get_top_breakouts(
-                        limit=20,
+                        limit=top_n,
                         model=st.session_state.breakout_model,
                         universe_mode=st.session_state.universe_mode,
                         sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
@@ -693,7 +738,7 @@ if not popup_mode:
             st.session_state.max_tickers_scan = int(max_scan)
             with st.spinner("Refreshing list for scan size..."):
                 top_breakouts = get_top_breakouts(
-                    limit=20,
+                    limit=top_n,
                     model=st.session_state.breakout_model,
                     universe_mode=st.session_state.universe_mode,
                     sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
@@ -707,7 +752,7 @@ if not popup_mode:
                     _apply_watchlist([res['ticker'] for res in top_breakouts])
                 else:
                     fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
-                    _apply_watchlist(list(fallback_universe[:20]))
+                    _apply_watchlist(list(fallback_universe[:top_n]))
             st.rerun()
     if st.session_state.universe_mode == "file":
         st.sidebar.caption("Universe source: bursa_universe.csv in the app folder. Put one 4-digit stock code per line (Main + ACE). Example: 6742 or 6742.KL.")
@@ -726,7 +771,7 @@ if not popup_mode:
         st.session_state.breakout_model = selected_model
         with st.spinner("Refreshing list for selected model..."):
             top_breakouts = get_top_breakouts(
-                limit=20,
+                limit=top_n,
                 model=st.session_state.breakout_model,
                 universe_mode=st.session_state.universe_mode,
                 sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
@@ -740,7 +785,7 @@ if not popup_mode:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
             else:
                 fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
-                _apply_watchlist(list(fallback_universe[:20]))
+                _apply_watchlist(list(fallback_universe[:top_n]))
         st.rerun()
 
     if st.session_state.breakout_model == "v3tv":
@@ -980,7 +1025,7 @@ if not popup_mode:
                 st.session_state.v3_entry_style = "Custom"
                 with st.spinner("Refreshing list..."):
                     top_breakouts = get_top_breakouts(
-                        limit=20,
+                        limit=top_n,
                         model=st.session_state.breakout_model,
                         universe_mode=st.session_state.universe_mode,
                         sector_allowlist=st.session_state.sector_focus or None,
@@ -1003,7 +1048,7 @@ if not popup_mode:
             st.session_state.sector_focus = selected_sectors
             with st.spinner("Refreshing list for selected sector focus..."):
                 top_breakouts = get_top_breakouts(
-                    limit=20,
+                    limit=top_n,
                     model=st.session_state.breakout_model,
                     universe_mode=st.session_state.universe_mode,
                     sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
@@ -1019,7 +1064,7 @@ if not popup_mode:
     if st.sidebar.button("🔄 Refresh Market Discovery", use_container_width=True):
         with st.spinner("Re-scanning KLCI components..."):
             top_breakouts = get_top_breakouts(
-                limit=20,
+                limit=top_n,
                 model=st.session_state.breakout_model,
                 universe_mode=st.session_state.universe_mode,
                 sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
@@ -1033,7 +1078,7 @@ if not popup_mode:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
             else:
                 fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
-                _apply_watchlist(list(fallback_universe[:20]))
+                _apply_watchlist(list(fallback_universe[:top_n]))
             st.success("Dashboard updated!")
             st.rerun()
 
@@ -1106,9 +1151,9 @@ if not popup_mode:
         _apply_watchlist(st.session_state.get("watchlist") or [])
         st.rerun()
 
-    if st.sidebar.button("🗑️ Reset to Top 20", use_container_width=True):
+    if st.sidebar.button(f"🗑️ Reset to Top {top_n}", use_container_width=True):
         top_breakouts = get_top_breakouts(
-            limit=20,
+            limit=top_n,
             model=st.session_state.breakout_model,
             universe_mode=st.session_state.universe_mode,
             sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
@@ -1617,7 +1662,7 @@ with tab_stocks:
             st.warning("No data found. Please click 'Refresh Market Discovery' or add valid tickers.")
         st.caption(f"Fetch summary: {fetch_success}/{fetch_attempted} tickers returned data.")
         if fetch_attempted == 0:
-            st.caption("Watchlist is empty. Try switching universe, clicking 'Refresh Market Discovery', or 'Reset to Top 20'.")
+            st.caption("Watchlist is empty. Try switching universe, clicking 'Refresh Market Discovery', or resetting to the top list.")
         st.caption("If this stays 0, Yahoo data may be blocked/rate-limited in your environment. Try again later, reduce scan size, or switch to a smaller universe (KLCI/Top100).")
         st.caption("Optional fallback: set BURSA_PRICE_API_BASE_URL and BURSA_PRICE_API_KEY in your environment to use a non-Yahoo data source.")
 
