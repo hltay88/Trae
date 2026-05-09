@@ -1119,7 +1119,7 @@ with tab_stocks:
     fetch_success = 0
     breakout_model = st.session_state.get("breakout_model", "v2")
     benchmark_df = None
-    if breakout_model in {"v2", "v3"}:
+    if breakout_model in {"v2", "v3", "v3tv"}:
         try:
             benchmark_df, _ = get_stock_data("^KLSE", period="1y")
         except Exception:
@@ -1215,12 +1215,33 @@ with tab_stocks:
                 if analysis:
                     data_rows.append(analysis)
                 elif breakout_model in {"v3", "v3tv"} and (is_manual or bool(st.session_state.get("v3_show_watchlist_all"))):
+                    trend = None
+                    if breakout_model == "v3tv":
+                        try:
+                            trend = analyze_breakout_v3(
+                                t,
+                                df,
+                                name,
+                                benchmark_df=benchmark_df,
+                                min_rows=min(120, len(df)),
+                                signal_lookback=st.session_state.v3_signal_lookback,
+                                max_runup_pct=st.session_state.v3_max_runup_pct,
+                                max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                                retest_days=st.session_state.v3_retest_days,
+                            )
+                        except Exception:
+                            trend = None
                     try:
                         from ta.momentum import RSIIndicator
                         rsi_v = RSIIndicator(df["Close"], window=14).rsi().iloc[-1]
                         rsi_v = float(rsi_v) if pd.notna(rsi_v) else 50.0
                     except Exception:
                         rsi_v = 50.0
+                    try:
+                        if isinstance(trend, dict) and trend.get("rsi") is not None:
+                            rsi_v = float(trend.get("rsi"))
+                    except Exception:
+                        pass
                     try:
                         last_close = float(df["Close"].iloc[-1])
                     except Exception:
@@ -1258,14 +1279,31 @@ with tab_stocks:
                         sector = ""
                         insight = ""
                         catalyst = ""
+                    try:
+                        if isinstance(trend, dict):
+                            if trend.get("name"):
+                                resolved_name = str(trend.get("name"))
+                            if trend.get("sector") is not None:
+                                sector = str(trend.get("sector") or "")
+                    except Exception:
+                        pass
+                    score_v = 0
+                    score_max_v = 7
+                    try:
+                        if isinstance(trend, dict) and trend.get("score") is not None:
+                            score_v = int(trend.get("score") or 0)
+                            score_max_v = int(trend.get("score_max") or 11)
+                    except Exception:
+                        score_v = 0
+                        score_max_v = 7
                     data_rows.append({
                         "ticker": str(t),
                         "name": str(resolved_name or str(t)),
                         "sector": str(sector or ""),
                         "price": float(px) if px is not None else 0.0,
                         "rsi": float(rsi_v),
-                        "score": 0,
-                        "score_max": 7,
+                        "score": int(score_v),
+                        "score_max": int(score_max_v),
                         "breakout_55": bool(is_breakout),
                         "breakout_candle": False,
                         "breakout_candle_valid": False,
@@ -1283,6 +1321,8 @@ with tab_stocks:
                         "liquidity_ok": True,
                         "analysis": str(insight or "Watchlist item (no V3 signal yet)."),
                         "catalyst": str(catalyst or ""),
+                        "trend_score": None if trend is None else int(score_v),
+                        "trend_score_max": None if trend is None else int(score_max_v),
                         "watch_only": True,
                         "data_ok": True,
                         "model": "v3tv" if breakout_model == "v3tv" else "v3",
@@ -1341,6 +1381,15 @@ with tab_stocks:
         if breakout_model in {"v3", "v3tv"}:
             sig_filter = str(st.session_state.get("v3_signal_filter", "all") or "all").lower().strip()
             original_rows = list(data_rows)
+            try:
+                wl_set = set(_uniq_tickers(st.session_state.get("watchlist") or []))
+            except Exception:
+                wl_set = set()
+            try:
+                manual_set2 = set(_uniq_tickers(st.session_state.get("manual_watchlist") or []))
+            except Exception:
+                manual_set2 = set()
+            keep_watch_all = bool(st.session_state.get("v3_show_watchlist_all"))
             watch_rows = [r for r in data_rows if bool(r.get("watch_only"))]
             filtered = [r for r in data_rows if not bool(r.get("watch_only"))]
             if sig_filter in {"late", "failed"}:
@@ -1400,6 +1449,30 @@ with tab_stocks:
                         tmp.append(r)
                 filtered = tmp
 
+            try:
+                kept = []
+                kept_seen = set()
+                filtered_seen = set()
+                for r in filtered:
+                    t0 = str(r.get("ticker") or "").upper().strip()
+                    if t0:
+                        filtered_seen.add(t0)
+                for r in original_rows:
+                    t0 = str(r.get("ticker") or "").upper().strip()
+                    if not t0:
+                        continue
+                    if t0 in filtered_seen:
+                        continue
+                    if t0 in kept_seen:
+                        continue
+                    if (t0 in manual_set2) or (keep_watch_all and (t0 in wl_set)):
+                        kept.append(r)
+                        kept_seen.add(t0)
+                if kept:
+                    filtered = kept + filtered
+            except Exception:
+                pass
+
             if watch_rows:
                 filtered = watch_rows + filtered
 
@@ -1456,7 +1529,10 @@ with tab_stocks:
             score_val = int(r.get("score", 0))
 
             if r.get("watch_only"):
-                status = "👀 WATCH"
+                if breakout_model == "v3tv":
+                    status = "🔥 STRONG" if score_val >= 8 else ("⚖️ NEUTRAL" if score_val >= 5 else "❄️ WEAK")
+                else:
+                    status = "👀 WATCH"
             elif breakout_model in {"v3", "v3tv"}:
                 if r.get("retest_confirmed"):
                     status = "🔥 STRONG"
