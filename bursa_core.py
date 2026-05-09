@@ -174,12 +174,17 @@ def infer_market_trends_from_news(news_items: list[dict], top_n: int = 6) -> dic
         "Property": ["property", "reits", "reit", "housing", "real estate"],
         "Healthcare": ["health", "hospital", "pharma", "medical"],
         "Consumer": ["consumer", "retail", "spending", "inflation", "gst"],
+        "Defense": ["defense", "defence", "military", "missile", "drone"],
+        "Shipping": ["shipping", "strait", "hormuz", "red sea", "freight", "logistics", "port"],
+        "Metals": ["gold", "copper", "nickel", "tin", "metal", "commodit"],
     }
     macro = {
-        "Rates / OPR": ["opr", "rate", "bnm", "inflation", "yield"],
-        "FX / Ringgit": ["ringgit", "fx", "usd", "dollar"],
-        "Commodities": ["oil", "brent", "crude", "cpo", "palm oil", "gas", "lng"],
-        "Risk Events": ["middle east", "geopolit", "war", "sanction", "strait", "hormuz"],
+        "Rates / Central Banks": ["opr", "rate", "bnm", "inflation", "yield", "fed", "fomc", "powell", "ecb", "boj"],
+        "US Macro": ["cpi", "ppi", "jobs", "payroll", "unemployment", "ism", "gdp", "recession", "soft landing"],
+        "FX": ["ringgit", "fx", "usd", "dollar", "yen", "yuan", "euro"],
+        "Commodities": ["oil", "brent", "crude", "cpo", "palm oil", "gas", "lng", "gold", "copper"],
+        "Risk / Geopolitics": ["middle east", "iran", "israel", "geopolit", "war", "sanction", "strait", "hormuz", "red sea", "ukraine", "russia"],
+        "Markets / Risk-on": ["s&p", "nasdaq", "dow", "vix", "risk", "sell-off", "rally"],
     }
     sector_scores: dict[str, int] = {k: 0 for k in kw.keys()}
     theme_scores: dict[str, int] = {k: 0 for k in macro.keys()}
@@ -205,6 +210,47 @@ def infer_market_trends_from_news(news_items: list[dict], top_n: int = 6) -> dic
     sectors = [{"sector": k, "mentions": int(v)} for k, v in sector_ranked if int(v) > 0][: int(top_n)]
     themes = [{"theme": k, "mentions": int(v)} for k, v in theme_ranked if int(v) > 0][: int(top_n)]
     return {"themes": themes, "sectors": sectors, "sector_scores": sector_scores, "theme_scores": theme_scores}
+
+
+def summarize_market_impacts(trends: dict) -> list[str]:
+    try:
+        theme_scores = dict((trends or {}).get("theme_scores") or {})
+        sector_scores = dict((trends or {}).get("sector_scores") or {})
+    except Exception:
+        theme_scores = {}
+        sector_scores = {}
+    notes: list[str] = []
+    try:
+        if int(theme_scores.get("Risk / Geopolitics", 0) or 0) > 0:
+            notes.append("Geopolitics headlines up: watch oil, freight, defense; risk-off can pressure growth and small caps.")
+    except Exception:
+        pass
+    try:
+        if int(theme_scores.get("Rates / Central Banks", 0) or 0) > 0 or int(theme_scores.get("US Macro", 0) or 0) > 0:
+            notes.append("Rates/macro in focus: banks, REITs, utilities and high-debt names are more sensitive to yields/OPR/Fed expectations.")
+    except Exception:
+        pass
+    try:
+        if int(sector_scores.get("Energy", 0) or 0) > 0 or int(sector_scores.get("Shipping", 0) or 0) > 0:
+            notes.append("Energy/shipping themes: oil & gas upstream, ports/logistics can move with crude and freight disruptions.")
+    except Exception:
+        pass
+    try:
+        if int(sector_scores.get("Technology", 0) or 0) > 0:
+            notes.append("Tech themes: semicon/AI/data-center related counters tend to follow global risk appetite and US tech leadership.")
+    except Exception:
+        pass
+    try:
+        if int(sector_scores.get("Metals", 0) or 0) > 0:
+            notes.append("Metals themes: gold/copper news often ties to risk sentiment and China/US growth expectations.")
+    except Exception:
+        pass
+    try:
+        if int(theme_scores.get("FX", 0) or 0) > 0:
+            notes.append("FX headlines: ringgit and USD moves can impact exporters/importers and commodity-linked earnings translation.")
+    except Exception:
+        pass
+    return notes[:6]
 
 def _tradingview_last_price_myr(symbol_path: str):
     try:

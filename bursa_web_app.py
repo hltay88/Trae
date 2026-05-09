@@ -1670,18 +1670,28 @@ with tab_news:
         cache_s = st.number_input("Cache seconds", min_value=60, max_value=3600, value=600, step=60)
         refresh = st.button("🔄 Refresh News", use_container_width=True)
         st.markdown("---")
-        include_defaults = st.checkbox("Include default feeds", value=True)
-        lang_label = st.selectbox("News language", ["English (MY)", "Malay (MY)"], index=0)
+        include_my_defaults = st.checkbox("Include Malaysia default feeds", value=True)
+        include_global_defaults = st.checkbox("Include global macro default feeds", value=True)
+        lang_label = st.selectbox("Malaysia news language", ["English (MY)", "Malay (MY)"], index=0)
         if lang_label.startswith("Malay"):
             hl, gl, ceid = "ms-MY", "MY", "MY:ms"
         else:
             hl, gl, ceid = "en-MY", "MY", "MY:en"
+        global_region = st.selectbox("Global region", ["US/Global (English)", "UK/Global (English)"], index=0)
+        if global_region.startswith("UK"):
+            ghl, ggl, gceid = "en-GB", "GB", "GB:en"
+        else:
+            ghl, ggl, gceid = "en-US", "US", "US:en"
+
         topics = [
             "Bursa Malaysia",
             "KLCI",
             "Malaysia OPR",
             "Ringgit",
             "Malaysia inflation",
+            "Malaysia GDP",
+            "Malaysia budget",
+            "Bank Negara Malaysia",
             "Data center Malaysia",
             "AI Malaysia",
             "Semiconductor Malaysia",
@@ -1697,9 +1707,73 @@ with tab_news:
             "REIT Malaysia",
             "Banking Malaysia",
         ]
-        selected_topics = st.multiselect("Topics (Google News)", topics, default=["Bursa Malaysia", "KLCI", "Malaysia OPR"])
-        custom_queries = st.text_area("Custom Google News queries (one per line)", value="", height=120)
-        custom_rss = st.text_area("Custom RSS URLs (one per line)", value="", height=120)
+        selected_topics = st.multiselect(
+            "Malaysia topics (Google News)",
+            topics,
+            default=[
+                "Bursa Malaysia",
+                "KLCI",
+                "Malaysia OPR",
+                "Ringgit",
+                "Malaysia inflation",
+                "Bank Negara Malaysia",
+                "Data center Malaysia",
+                "CPO price",
+                "Utilities tariff Malaysia",
+                "REIT Malaysia",
+                "Banking Malaysia",
+            ],
+        )
+
+        global_topics = [
+            "US Federal Reserve",
+            "FOMC",
+            "US CPI",
+            "US jobs report",
+            "US Treasury yields",
+            "S&P 500",
+            "Nasdaq",
+            "VIX",
+            "US Iran tensions",
+            "Iran Israel conflict",
+            "Strait of Hormuz",
+            "Middle East conflict",
+            "Oil price",
+            "OPEC",
+            "Brent crude",
+            "Gold price",
+            "China stimulus",
+            "China property",
+            "US China trade",
+            "Ukraine war",
+            "Global recession",
+        ]
+        selected_global_topics = st.multiselect(
+            "Global macro topics (Google News)",
+            global_topics,
+            default=[
+                "US Federal Reserve",
+                "FOMC",
+                "US CPI",
+                "US jobs report",
+                "US Treasury yields",
+                "S&P 500",
+                "Nasdaq",
+                "US Iran tensions",
+                "Middle East conflict",
+                "Strait of Hormuz",
+                "Oil price",
+                "OPEC",
+                "Gold price",
+                "China stimulus",
+                "Ukraine war",
+                "VIX",
+            ],
+        )
+
+        custom_queries = st.text_area("Custom Malaysia Google News queries (one per line)", value="", height=90)
+        custom_global_queries = st.text_area("Custom global Google News queries (one per line)", value="", height=90)
+        custom_rss = st.text_area("Custom RSS URLs (one per line)", value="", height=90)
     with col_b:
         if refresh:
             try:
@@ -1711,8 +1785,8 @@ with tab_news:
         items = []
         try:
             feed_map = {}
-            if include_defaults:
-                for q in ["Bursa Malaysia", "KLCI", "Malaysia OPR"]:
+            if include_my_defaults:
+                for q in ["Bursa Malaysia", "KLCI", "Malaysia OPR", "Ringgit", "Malaysia inflation", "Bank Negara Malaysia", "Malaysia GDP"]:
                     u = _core.google_news_rss_url(q, hl=hl, gl=gl, ceid=ceid) if hasattr(_core, "google_news_rss_url") else ""
                     if u:
                         feed_map[f"Google News: {q}"] = u
@@ -1724,6 +1798,19 @@ with tab_news:
                 u = _core.google_news_rss_url(q, hl=hl, gl=gl, ceid=ceid) if hasattr(_core, "google_news_rss_url") else ""
                 if u:
                     feed_map[f"Google News: {q}"] = u
+            if include_global_defaults:
+                for q in ["US Iran tensions", "Middle East conflict", "Strait of Hormuz", "US Federal Reserve", "FOMC", "US CPI", "US jobs report", "US Treasury yields", "S&P 500", "Nasdaq", "VIX", "Oil price", "OPEC", "Gold price", "China stimulus", "Ukraine war"]:
+                    u = _core.google_news_rss_url(q, hl=ghl, gl=ggl, ceid=gceid) if hasattr(_core, "google_news_rss_url") else ""
+                    if u:
+                        feed_map[f"Global: {q}"] = u
+            for q in (selected_global_topics or []):
+                u = _core.google_news_rss_url(q, hl=ghl, gl=ggl, ceid=gceid) if hasattr(_core, "google_news_rss_url") else ""
+                if u:
+                    feed_map[f"Global: {q}"] = u
+            for q in [x.strip() for x in str(custom_global_queries or "").splitlines() if x.strip()]:
+                u = _core.google_news_rss_url(q, hl=ghl, gl=ggl, ceid=gceid) if hasattr(_core, "google_news_rss_url") else ""
+                if u:
+                    feed_map[f"Global: {q}"] = u
             for i, u in enumerate([x.strip() for x in str(custom_rss or "").splitlines() if x.strip()], start=1):
                 if u.startswith("http"):
                     feed_map[f"RSS: Custom {i}"] = u
@@ -1741,6 +1828,16 @@ with tab_news:
             st.caption(f"Feeds active: {0 if 'feed_map' not in locals() else len(feed_map)}")
         except Exception:
             pass
+
+        notes = []
+        try:
+            notes = _core.summarize_market_impacts(trends) if hasattr(_core, "summarize_market_impacts") else []
+        except Exception:
+            notes = []
+        if notes:
+            st.markdown("#### What may move markets (headline-based)")
+            for n in notes:
+                st.write(f"- {str(n)}")
 
         themes = list((trends or {}).get("themes") or [])
         sectors = list((trends or {}).get("sectors") or [])
