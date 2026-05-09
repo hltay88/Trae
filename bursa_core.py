@@ -5,6 +5,10 @@ import requests
 import re
 import csv
 import time
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
+from html import unescape
+from urllib.parse import quote_plus
 
 cache_path = os.path.join(os.getcwd(), ".yfinance_cache")
 if os.environ.get("STREAMLIT_SERVER_PORT") or not os.access(os.getcwd(), os.W_OK):
@@ -63,6 +67,144 @@ MARKET_INSIGHTS = {
     "FCPO=F": {"code": "FCPO", "name": "CPO FUTURES", "sector": "Futures", "analysis": "Global benchmark for Crude Palm Oil. Driven by edible oil supply/demand and biodiesel mandates.", "catalyst": "Indonesian export policies and weather patterns."},
     "FM70=F": {"code": "FM70", "name": "MID 70 FUTURES", "sector": "Futures", "analysis": "Proxy for the FBM Mid 70 Index, representing mid-cap growth stocks.", "catalyst": "Domestic liquidity and mid-cap earnings momentum."}
 }
+
+_NEWS_CACHE: dict[str, tuple[float, list[dict]]] = {}
+
+
+def _parse_rss_items(xml_text: str, source: str, limit: int = 30) -> list[dict]:
+    out: list[dict] = []
+    if not xml_text:
+        return out
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return out
+    items = root.findall(".//item")
+    for it in items:
+        try:
+            title = it.findtext("title") or ""
+            link = it.findtext("link") or ""
+            pub = it.findtext("pubDate") or it.findtext("{http://purl.org/dc/elements/1.1/}date") or ""
+            title = unescape(str(title)).strip()
+            link = str(link).strip()
+            dt = None
+            if pub:
+                try:
+                    dt = parsedate_to_datetime(str(pub))
+                except Exception:
+                    dt = None
+            out.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "published": pub,
+                    "published_ts": None if dt is None else float(dt.timestamp()),
+                    "source": str(source),
+                }
+            )
+        except Exception:
+            continue
+        if len(out) >= int(limit):
+            break
+    return out
+
+
+def get_latest_market_news(limit: int = 40, cache_seconds: int = 600, feeds: dict | None = None) -> list[dict]:
+    default_feeds = {
+        "Google News: Bursa Malaysia": "https://news.google.com/rss/search?q=Bursa%20Malaysia&hl=en-MY&gl=MY&ceid=MY:en",
+        "Google News: KLCI": "https://news.google.com/rss/search?q=KLCI&hl=en-MY&gl=MY&ceid=MY:en",
+        "Google News: Malaysia OPR": "https://news.google.com/rss/search?q=Malaysia%20OPR&hl=en-MY&gl=MY&ceid=MY:en",
+    }
+    feed_map = feeds if isinstance(feeds, dict) and feeds else default_feeds
+    merged: list[dict] = []
+    now = time.time()
+    for src, url in feed_map.items():
+        if not url:
+            continue
+        cache_key = f"rss:{src}:{url}"
+        cached = _NEWS_CACHE.get(cache_key)
+        if cached and (now - float(cached[0])) <= float(cache_seconds):
+            items = list(cached[1] or [])
+        else:
+            items = []
+            try:
+                r = requests.get(
+                    str(url),
+                    headers={"User-Agent": "Mozilla/5.0", "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8"},
+                    timeout=20,
+                )
+                txt = r.text if getattr(r, "text", None) is not None else ""
+                if int(getattr(r, "status_code", 0) or 0) == 200 and txt:
+                    items = _parse_rss_items(txt, source=str(src), limit=50)
+            except Exception:
+                items = []
+            _NEWS_CACHE[cache_key] = (now, items)
+        merged.extend(items)
+    seen = set()
+    uniq: list[dict] = []
+    for it in merged:
+        try:
+            k = str(it.get("link") or "").strip() or str(it.get("title") or "").strip()
+        except Exception:
+            k = ""
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        uniq.append(it)
+    uniq.sort(key=lambda x: float(x.get("published_ts") or 0.0), reverse=True)
+    return uniq[: int(limit)]
+
+
+def google_news_rss_url(query: str, hl: str = "en-MY", gl: str = "MY", ceid: str = "MY:en") -> str:
+    q = str(query or "").strip()
+    if not q:
+        return ""
+    return f"https://news.google.com/rss/search?q={quote_plus(q)}&hl={quote_plus(hl)}&gl={quote_plus(gl)}&ceid={quote_plus(ceid)}"
+
+
+def infer_market_trends_from_news(news_items: list[dict], top_n: int = 6) -> dict:
+    kw = {
+        "Technology": ["ai", "data center", "datacentre", "semiconductor", "chip", "5g", "cloud"],
+        "Energy": ["oil", "opec", "brent", "crude", "lng", "gas", "petroleum"],
+        "Banking": ["opr", "rate", "inflation", "bnm", "ringgit", "bond", "yield"],
+        "Utilities": ["tariff", "grid", "renewable", "solar", "power", "electricity", "netr"],
+        "Infrastructure": ["infrastructure", "construction", "rail", "mrt", "lrt", "highway", "project"],
+        "Telco": ["telco", "telecom", "maxis", "digi", "axiata", "tower", "broadband"],
+        "Plantation": ["cpo", "palm oil", "plantation", "biodiesel"],
+        "Property": ["property", "reits", "reit", "housing", "real estate"],
+        "Healthcare": ["health", "hospital", "pharma", "medical"],
+        "Consumer": ["consumer", "retail", "spending", "inflation", "gst"],
+    }
+    macro = {
+        "Rates / OPR": ["opr", "rate", "bnm", "inflation", "yield"],
+        "FX / Ringgit": ["ringgit", "fx", "usd", "dollar"],
+        "Commodities": ["oil", "brent", "crude", "cpo", "palm oil", "gas", "lng"],
+        "Risk Events": ["middle east", "geopolit", "war", "sanction", "strait", "hormuz"],
+    }
+    sector_scores: dict[str, int] = {k: 0 for k in kw.keys()}
+    theme_scores: dict[str, int] = {k: 0 for k in macro.keys()}
+    for it in (news_items or []):
+        try:
+            t = (str(it.get("title") or "") + " " + str(it.get("source") or "")).lower()
+        except Exception:
+            t = ""
+        if not t:
+            continue
+        for sec, words in kw.items():
+            for w in words:
+                if w and w in t:
+                    sector_scores[sec] += 1
+                    break
+        for th, words in macro.items():
+            for w in words:
+                if w and w in t:
+                    theme_scores[th] += 1
+                    break
+    sector_ranked = sorted(sector_scores.items(), key=lambda kv: kv[1], reverse=True)
+    theme_ranked = sorted(theme_scores.items(), key=lambda kv: kv[1], reverse=True)
+    sectors = [{"sector": k, "mentions": int(v)} for k, v in sector_ranked if int(v) > 0][: int(top_n)]
+    themes = [{"theme": k, "mentions": int(v)} for k, v in theme_ranked if int(v) > 0][: int(top_n)]
+    return {"themes": themes, "sectors": sectors, "sector_scores": sector_scores, "theme_scores": theme_scores}
 
 def _tradingview_last_price_myr(symbol_path: str):
     try:

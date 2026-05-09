@@ -20,6 +20,7 @@ import hmac
 import base64
 import json
 from urllib.parse import quote
+from html import escape as _html_escape
 import streamlit.components.v1 as components
 import bursa_core as _core
 
@@ -1111,7 +1112,7 @@ if not popup_mode:
         st.rerun()
 
 # --- MAIN DASHBOARD TABS ---
-tab_stocks, tab_futures = st.tabs(["📊 Stock Breakouts", "⛓️ Futures Monitoring"])
+tab_stocks, tab_futures, tab_news = st.tabs(["📊 Stock Breakouts", "⛓️ Futures Monitoring", "📰 News & Trends"])
 
 with tab_stocks:
     data_rows = []
@@ -1633,6 +1634,130 @@ with tab_futures:
         st.caption("Note: Futures analysis uses daily settlement prices. Breakout scores 4+ indicate high trend momentum.")
     else:
         st.error("Could not fetch futures data. Please check your internet connection.")
+
+with tab_news:
+    st.markdown("### 📰 News & Trends")
+    st.caption("News is pulled from public RSS sources. Headlines may be delayed and are for informational purposes only.")
+    col_a, col_b = st.columns([1, 2])
+    with col_a:
+        n_limit = st.number_input("Headlines to show", min_value=10, max_value=100, value=40, step=10)
+        cache_s = st.number_input("Cache seconds", min_value=60, max_value=3600, value=600, step=60)
+        refresh = st.button("🔄 Refresh News", use_container_width=True)
+        st.markdown("---")
+        include_defaults = st.checkbox("Include default feeds", value=True)
+        lang_label = st.selectbox("News language", ["English (MY)", "Malay (MY)"], index=0)
+        if lang_label.startswith("Malay"):
+            hl, gl, ceid = "ms-MY", "MY", "MY:ms"
+        else:
+            hl, gl, ceid = "en-MY", "MY", "MY:en"
+        topics = [
+            "Bursa Malaysia",
+            "KLCI",
+            "Malaysia OPR",
+            "Ringgit",
+            "Malaysia inflation",
+            "Data center Malaysia",
+            "AI Malaysia",
+            "Semiconductor Malaysia",
+            "Oil price",
+            "Brent crude",
+            "Malaysia LNG",
+            "CPO price",
+            "Palm oil Malaysia",
+            "Utilities tariff Malaysia",
+            "Renewable energy Malaysia",
+            "Construction projects Malaysia",
+            "MRT Malaysia",
+            "REIT Malaysia",
+            "Banking Malaysia",
+        ]
+        selected_topics = st.multiselect("Topics (Google News)", topics, default=["Bursa Malaysia", "KLCI", "Malaysia OPR"])
+        custom_queries = st.text_area("Custom Google News queries (one per line)", value="", height=120)
+        custom_rss = st.text_area("Custom RSS URLs (one per line)", value="", height=120)
+    with col_b:
+        if refresh:
+            try:
+                if hasattr(_core, "_NEWS_CACHE"):
+                    _core._NEWS_CACHE.clear()
+            except Exception:
+                pass
+
+        items = []
+        try:
+            feed_map = {}
+            if include_defaults:
+                for q in ["Bursa Malaysia", "KLCI", "Malaysia OPR"]:
+                    u = _core.google_news_rss_url(q, hl=hl, gl=gl, ceid=ceid) if hasattr(_core, "google_news_rss_url") else ""
+                    if u:
+                        feed_map[f"Google News: {q}"] = u
+            for q in (selected_topics or []):
+                u = _core.google_news_rss_url(q, hl=hl, gl=gl, ceid=ceid) if hasattr(_core, "google_news_rss_url") else ""
+                if u:
+                    feed_map[f"Google News: {q}"] = u
+            for q in [x.strip() for x in str(custom_queries or "").splitlines() if x.strip()]:
+                u = _core.google_news_rss_url(q, hl=hl, gl=gl, ceid=ceid) if hasattr(_core, "google_news_rss_url") else ""
+                if u:
+                    feed_map[f"Google News: {q}"] = u
+            for i, u in enumerate([x.strip() for x in str(custom_rss or "").splitlines() if x.strip()], start=1):
+                if u.startswith("http"):
+                    feed_map[f"RSS: Custom {i}"] = u
+            items = _core.get_latest_market_news(limit=int(n_limit), cache_seconds=int(cache_s), feeds=feed_map or None)
+        except Exception:
+            items = []
+
+        trends = {}
+        try:
+            trends = _core.infer_market_trends_from_news(items, top_n=8)
+        except Exception:
+            trends = {}
+
+        try:
+            st.caption(f"Feeds active: {0 if 'feed_map' not in locals() else len(feed_map)}")
+        except Exception:
+            pass
+
+        themes = list((trends or {}).get("themes") or [])
+        sectors = list((trends or {}).get("sectors") or [])
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("#### Macro Themes (by headline mentions)")
+            if themes:
+                st.dataframe(pd.DataFrame(themes), use_container_width=True, hide_index=True)
+            else:
+                st.info("No themes detected from headlines yet.")
+        with c2:
+            st.markdown("#### Sectors Mentioned (by headline keywords)")
+            if sectors:
+                st.dataframe(pd.DataFrame(sectors), use_container_width=True, hide_index=True)
+            else:
+                st.info("No sector signals detected from headlines yet.")
+
+        st.markdown("#### Latest Headlines")
+        if not items:
+            st.warning("No headlines loaded. Try Refresh News, or check network access in your environment.")
+        else:
+            rows = []
+            for it in items:
+                rows.append(
+                    {
+                        "Time": str(it.get("published") or ""),
+                        "Source": str(it.get("source") or ""),
+                        "Title": str(it.get("title") or ""),
+                        "Link": str(it.get("link") or ""),
+                    }
+                )
+            df_n = pd.DataFrame(rows)
+            try:
+                def _mk_link(row):
+                    u = str(row.get("Link") or "")
+                    t = str(row.get("Title") or "")
+                    if u.startswith("http"):
+                        return f'<a href="{_html_escape(u)}" target="_blank" rel="noopener noreferrer">{_html_escape(t)}</a>'
+                    return _html_escape(t)
+                df_n["Title"] = df_n.apply(_mk_link, axis=1)
+            except Exception:
+                pass
+            st.markdown(df_n[["Time", "Source", "Title"]].to_html(escape=False, index=False), unsafe_allow_html=True)
 
 if not popup_mode:
     st.sidebar.markdown("---")
