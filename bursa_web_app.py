@@ -764,6 +764,8 @@ if not popup_mode:
             st.session_state.v3_signal_filter = "all"
         if "v3_show_watchlist_all" not in st.session_state:
             st.session_state.v3_show_watchlist_all = True
+        if "v3_signals_only" not in st.session_state:
+            st.session_state.v3_signals_only = True
 
         entry_options = [
             "Early Entry (Recommended)",
@@ -885,11 +887,19 @@ if not popup_mode:
         )
 
         st.sidebar.caption("Note: V3 is stricter than V1/V2. A stock can rank high in V1 but show no V3 signal if it lacks a recent power-candle + volume breakout.")
-        st.session_state.v3_show_watchlist_all = st.sidebar.toggle(
-            "Show watchlist even without signal",
-            value=bool(st.session_state.v3_show_watchlist_all),
-            help="If enabled, manually added stocks still appear even when they have no V3/V3tv breakout signal yet.",
-        )
+        if st.session_state.breakout_model == "v3":
+            st.session_state.v3_signals_only = st.sidebar.toggle(
+                "Show only valid V3 signals",
+                value=bool(st.session_state.v3_signals_only),
+                help="If enabled, shows only V3 signals where ⚡ BREAKOUT (or retest-confirmed) is true.",
+            )
+            st.session_state.v3_show_watchlist_all = False
+        else:
+            st.session_state.v3_show_watchlist_all = st.sidebar.toggle(
+                "Show watchlist even without signal",
+                value=bool(st.session_state.v3_show_watchlist_all),
+                help="If enabled, manually added stocks still appear even when they have no V3tv breakout signal yet.",
+            )
 
         if "v3_breakout_day_only" not in st.session_state:
             st.session_state.v3_breakout_day_only = False
@@ -1215,7 +1225,7 @@ with tab_stocks:
 
                 if analysis:
                     data_rows.append(analysis)
-                elif breakout_model in {"v3", "v3tv"} and (is_manual or bool(st.session_state.get("v3_show_watchlist_all"))):
+                elif breakout_model == "v3tv" and (is_manual or bool(st.session_state.get("v3_show_watchlist_all"))):
                     trend = None
                     if breakout_model == "v3tv":
                         try:
@@ -1328,7 +1338,7 @@ with tab_stocks:
                         "data_ok": True,
                         "model": "v3tv" if breakout_model == "v3tv" else "v3",
                     })
-            elif breakout_model in {"v3", "v3tv"} and (is_manual or bool(st.session_state.get("v3_show_watchlist_all"))):
+            elif breakout_model == "v3tv" and (is_manual or bool(st.session_state.get("v3_show_watchlist_all"))):
                 try:
                     _, resolved_name, sector, insight, catalyst = _core._resolve_insight_v3(str(t), None)
                 except Exception:
@@ -1394,6 +1404,17 @@ with tab_stocks:
             watch_rows = [r for r in data_rows if bool(r.get("watch_only"))]
             signal_rows = [r for r in data_rows if not bool(r.get("watch_only"))]
             filtered = list(signal_rows)
+            if breakout_model == "v3":
+                wl_set = set()
+                manual_set2 = set()
+                keep_watch_all = False
+                watch_rows = []
+                if bool(st.session_state.get("v3_signals_only")):
+                    try:
+                        filtered = [r for r in filtered if bool(r.get("breakout_candle_valid")) or bool(r.get("retest_confirmed"))]
+                    except Exception:
+                        filtered = []
+                    original_rows = list(filtered)
             if sig_filter in {"late", "failed"}:
                 tmp = []
                 for r in filtered:
@@ -1451,49 +1472,54 @@ with tab_stocks:
                         tmp.append(r)
                 filtered = tmp
 
-            try:
-                filtered_seen = set()
-                for r in filtered:
-                    t0 = str(r.get("ticker") or "").upper().strip()
-                    if t0:
-                        filtered_seen.add(t0)
-                kept = []
-                kept_seen = set()
-                for r in signal_rows:
-                    t0 = str(r.get("ticker") or "").upper().strip()
-                    if not t0:
-                        continue
-                    if t0 in filtered_seen:
-                        continue
-                    if t0 in kept_seen:
-                        continue
-                    if (t0 in manual_set2) or (keep_watch_all and (t0 in wl_set)):
-                        kept.append(r)
-                        kept_seen.add(t0)
-                if kept:
-                    filtered = kept + filtered
-            except Exception:
-                pass
+            if breakout_model == "v3tv":
+                try:
+                    filtered_seen = set()
+                    for r in filtered:
+                        t0 = str(r.get("ticker") or "").upper().strip()
+                        if t0:
+                            filtered_seen.add(t0)
+                    kept = []
+                    kept_seen = set()
+                    for r in signal_rows:
+                        t0 = str(r.get("ticker") or "").upper().strip()
+                        if not t0:
+                            continue
+                        if t0 in filtered_seen:
+                            continue
+                        if t0 in kept_seen:
+                            continue
+                        if (t0 in manual_set2) or (keep_watch_all and (t0 in wl_set)):
+                            kept.append(r)
+                            kept_seen.add(t0)
+                    if kept:
+                        filtered = kept + filtered
+                except Exception:
+                    pass
 
-            try:
-                final_rows = []
-                seen_t = set()
-                for r in (watch_rows + filtered):
-                    t0 = str(r.get("ticker") or "").upper().strip()
-                    if not t0:
-                        continue
-                    if t0 in seen_t:
-                        continue
-                    seen_t.add(t0)
-                    final_rows.append(r)
-                filtered = final_rows
-            except Exception:
-                if watch_rows:
-                    filtered = watch_rows + filtered
+                try:
+                    final_rows = []
+                    seen_t = set()
+                    for r in (watch_rows + filtered):
+                        t0 = str(r.get("ticker") or "").upper().strip()
+                        if not t0:
+                            continue
+                        if t0 in seen_t:
+                            continue
+                        seen_t.add(t0)
+                        final_rows.append(r)
+                    filtered = final_rows
+                except Exception:
+                    if watch_rows:
+                        filtered = watch_rows + filtered
 
             if not filtered:
-                st.warning("No matching rows for the selected V3 filter. Showing the full list instead.")
-                data_rows = original_rows
+                if breakout_model == "v3":
+                    st.warning("No V3 signals match the current filters.")
+                    data_rows = []
+                else:
+                    st.warning("No matching rows for the selected V3 filter. Showing the full list instead.")
+                    data_rows = original_rows
             else:
                 data_rows = filtered
 
