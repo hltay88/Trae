@@ -894,8 +894,8 @@ if not popup_mode:
         if "intraday_max_tickers" not in st.session_state:
             st.session_state.intraday_max_tickers = 20
         st.sidebar.caption("V3tv (Early Entry) default: 20 stocks • NEAR=0.5% • Vol>=1.8x • TV20>=RM2.0m")
-        with st.sidebar.expander("Advanced (optional)", expanded=False):
-            st.session_state.intraday_max_tickers = st.sidebar.slider(
+        with st.sidebar.expander("Advanced (optional)", expanded=True):
+            st.session_state.intraday_max_tickers = st.slider(
                 "Intraday max tickers",
                 min_value=10,
                 max_value=200,
@@ -903,7 +903,7 @@ if not popup_mode:
                 step=10,
                 help="V3tv uses TradingView last price (no token). Keep this smaller to reduce rate limits.",
             )
-            st.session_state.v3tv_proximity_pct = st.sidebar.slider(
+            st.session_state.v3tv_proximity_pct = st.slider(
                 "Near-breakout % (early alert)",
                 min_value=0.2,
                 max_value=3.0,
@@ -911,17 +911,17 @@ if not popup_mode:
                 step=0.1,
                 help="Shows stocks whose live price is within this % below the 55-day breakout level.",
             )
-            st.session_state.v3tv_only_near_breakout = st.sidebar.toggle(
+            st.session_state.v3tv_only_near_breakout = st.toggle(
                 "Show only Breakout / Near-breakout",
                 value=bool(st.session_state.v3tv_only_near_breakout),
                 help="Hides watch-only rows so you can focus on early-entry setups and live breakouts.",
             )
-            st.session_state.v3tv_require_daily_vol_surge = st.sidebar.toggle(
+            st.session_state.v3tv_require_daily_vol_surge = st.toggle(
                 "Require strong daily volume",
                 value=bool(st.session_state.v3tv_require_daily_vol_surge),
                 help="Applies to 🟡 NEAR only (early alerts). Live ⚡ BREAKOUT will still show even if daily volume is not strong.",
             )
-            st.session_state.v3tv_daily_vol_mult = st.sidebar.slider(
+            st.session_state.v3tv_daily_vol_mult = st.slider(
                 "Daily volume spike x",
                 min_value=1.0,
                 max_value=3.0,
@@ -929,7 +929,7 @@ if not popup_mode:
                 step=0.1,
                 help="Volume(last daily bar) / average volume(20 days). Higher = stricter.",
             )
-            st.session_state.v3tv_min_traded_value20 = st.sidebar.number_input(
+            st.session_state.v3tv_min_traded_value20 = st.number_input(
                 "Min traded value (RM, avg20)",
                 min_value=0.0,
                 value=float(st.session_state.v3tv_min_traded_value20),
