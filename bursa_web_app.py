@@ -436,6 +436,22 @@ if "max_tickers_scan" not in st.session_state:
     st.session_state.max_tickers_scan = 300
 if "top_results_limit" not in st.session_state:
     st.session_state.top_results_limit = 20
+if "v3_breakout_buffer_pct" not in st.session_state:
+    st.session_state.v3_breakout_buffer_pct = 0.0
+if "v3_volume_spike_mult" not in st.session_state:
+    st.session_state.v3_volume_spike_mult = 1.8
+if "v3_power_close_pos_min" not in st.session_state:
+    st.session_state.v3_power_close_pos_min = 0.7
+if "v3_power_body_pct_min" not in st.session_state:
+    st.session_state.v3_power_body_pct_min = 0.55
+if "v3_min_traded_value20" not in st.session_state:
+    st.session_state.v3_min_traded_value20 = 1_000_000.0
+if "v3_require_rs_positive" not in st.session_state:
+    st.session_state.v3_require_rs_positive = False
+if "v3_require_atr_contraction" not in st.session_state:
+    st.session_state.v3_require_atr_contraction = False
+if "v3_require_benchmark_trend" not in st.session_state:
+    st.session_state.v3_require_benchmark_trend = False
 
 # --- UI ---
 if not chart_symbol:
@@ -534,6 +550,27 @@ def _apply_watchlist(scanned=None):
     st.session_state.manual_watchlist = manual
     st.session_state.watchlist = _uniq_tickers(manual + scan)
 
+def _v3_params_for_model(model_key: str) -> dict:
+    try:
+        m = str(model_key or "").lower().strip()
+    except Exception:
+        m = ""
+    if m != "v3":
+        return {}
+    try:
+        return {
+            "breakout_buffer_pct": float(st.session_state.get("v3_breakout_buffer_pct") or 0.0),
+            "volume_spike_mult": float(st.session_state.get("v3_volume_spike_mult") or 1.8),
+            "power_close_pos_min": float(st.session_state.get("v3_power_close_pos_min") or 0.7),
+            "power_body_pct_min": float(st.session_state.get("v3_power_body_pct_min") or 0.55),
+            "min_traded_value20": float(st.session_state.get("v3_min_traded_value20") or 1_000_000.0),
+            "require_rs_positive": bool(st.session_state.get("v3_require_rs_positive")),
+            "require_atr_contraction": bool(st.session_state.get("v3_require_atr_contraction")),
+            "require_benchmark_trend": bool(st.session_state.get("v3_require_benchmark_trend")),
+        }
+    except Exception:
+        return {}
+
 
 # Initialize session state for watchlist
 if 'watchlist' not in st.session_state:
@@ -556,6 +593,7 @@ if 'watchlist' not in st.session_state:
             max_pullback_pct=st.session_state.v3_max_pullback_pct,
             retest_days=st.session_state.v3_retest_days,
             max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
+            **_v3_params_for_model(st.session_state.breakout_model),
         )
         if top_breakouts:
             _apply_watchlist([res['ticker'] for res in top_breakouts])
@@ -597,6 +635,7 @@ if not popup_mode:
                 max_pullback_pct=st.session_state.v3_max_pullback_pct,
                 retest_days=st.session_state.v3_retest_days,
                 max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
+                **_v3_params_for_model(st.session_state.breakout_model),
             )
             if top_breakouts:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
@@ -652,6 +691,7 @@ if not popup_mode:
                 max_pullback_pct=st.session_state.v3_max_pullback_pct,
                 retest_days=st.session_state.v3_retest_days,
                 max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
+                **_v3_params_for_model(st.session_state.breakout_model),
             )
             if top_breakouts:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
@@ -725,6 +765,7 @@ if not popup_mode:
                         max_runup_pct=st.session_state.v3_max_runup_pct,
                         max_pullback_pct=st.session_state.v3_max_pullback_pct,
                         retest_days=st.session_state.v3_retest_days,
+                        **_v3_params_for_model(st.session_state.breakout_model),
                     )
                     _apply_watchlist([res['ticker'] for res in top_breakouts])
                 st.rerun()
@@ -747,6 +788,7 @@ if not popup_mode:
                     max_pullback_pct=st.session_state.v3_max_pullback_pct,
                     retest_days=st.session_state.v3_retest_days,
                     max_tickers=st.session_state.max_tickers_scan,
+                    **_v3_params_for_model(st.session_state.breakout_model),
                 )
                 if top_breakouts:
                     _apply_watchlist([res['ticker'] for res in top_breakouts])
@@ -780,6 +822,7 @@ if not popup_mode:
                 max_pullback_pct=st.session_state.v3_max_pullback_pct,
                 retest_days=st.session_state.v3_retest_days,
                 max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
+                **_v3_params_for_model(st.session_state.breakout_model),
             )
             if top_breakouts:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
@@ -813,6 +856,7 @@ if not popup_mode:
             st.session_state.v3_signals_only = True
 
         entry_options = [
+            "Genuine (Strict)",
             "Early Entry (Recommended)",
             "Balanced",
             "Confirmed",
@@ -821,19 +865,25 @@ if not popup_mode:
             "Custom (Manual)",
         ]
         entry_idx = 0
-        if str(st.session_state.v3_entry_style).startswith("Balanced"):
+        if str(st.session_state.v3_entry_style).startswith("Genuine"):
+            entry_idx = 0
+        elif str(st.session_state.v3_entry_style).startswith("Early"):
             entry_idx = 1
-        elif str(st.session_state.v3_entry_style).startswith("Confirmed"):
+        elif str(st.session_state.v3_entry_style).startswith("Balanced"):
             entry_idx = 2
-        elif str(st.session_state.v3_entry_style).startswith("Late"):
+        elif str(st.session_state.v3_entry_style).startswith("Confirmed"):
             entry_idx = 3
-        elif str(st.session_state.v3_entry_style).startswith("Failed"):
+        elif str(st.session_state.v3_entry_style).startswith("Late"):
             entry_idx = 4
-        elif str(st.session_state.v3_entry_style).startswith("Custom"):
+        elif str(st.session_state.v3_entry_style).startswith("Failed"):
             entry_idx = 5
+        elif str(st.session_state.v3_entry_style).startswith("Custom"):
+            entry_idx = 6
 
         entry_label = st.sidebar.selectbox("Entry Style", entry_options, index=entry_idx)
-        if entry_label.startswith("Early"):
+        if entry_label.startswith("Genuine"):
+            selected_style = "Genuine"
+        elif entry_label.startswith("Early"):
             selected_style = "Early Entry"
         elif entry_label.startswith("Balanced"):
             selected_style = "Balanced"
@@ -849,30 +899,76 @@ if not popup_mode:
         if selected_style != st.session_state.v3_entry_style:
             st.session_state.v3_entry_style = selected_style
 
-            if selected_style == "Early Entry":
+            if selected_style == "Genuine":
+                st.session_state.v3_signal_filter = "all"
+                st.session_state.v3_signal_lookback = 5
+                st.session_state.v3_max_runup_pct = 4.0
+                st.session_state.v3_max_pullback_pct = 1.5
+                st.session_state.v3_retest_days = 3
+                st.session_state.v3_breakout_buffer_pct = 0.5
+                st.session_state.v3_volume_spike_mult = 2.0
+                st.session_state.v3_power_close_pos_min = 0.75
+                st.session_state.v3_power_body_pct_min = 0.6
+                st.session_state.v3_min_traded_value20 = 2_000_000.0
+                st.session_state.v3_require_rs_positive = True
+                st.session_state.v3_require_atr_contraction = True
+                st.session_state.v3_require_benchmark_trend = True
+            elif selected_style == "Early Entry":
                 st.session_state.v3_signal_filter = "all"
                 st.session_state.v3_signal_lookback = 5
                 st.session_state.v3_max_runup_pct = 5.0
                 st.session_state.v3_max_pullback_pct = 2.0
                 st.session_state.v3_retest_days = 0
+                st.session_state.v3_breakout_buffer_pct = 0.0
+                st.session_state.v3_volume_spike_mult = 1.8
+                st.session_state.v3_power_close_pos_min = 0.7
+                st.session_state.v3_power_body_pct_min = 0.55
+                st.session_state.v3_min_traded_value20 = 1_000_000.0
+                st.session_state.v3_require_rs_positive = False
+                st.session_state.v3_require_atr_contraction = False
+                st.session_state.v3_require_benchmark_trend = False
             elif selected_style == "Balanced":
                 st.session_state.v3_signal_filter = "all"
                 st.session_state.v3_signal_lookback = 10
                 st.session_state.v3_max_runup_pct = 8.0
                 st.session_state.v3_max_pullback_pct = 3.0
                 st.session_state.v3_retest_days = 3
+                st.session_state.v3_breakout_buffer_pct = 0.0
+                st.session_state.v3_volume_spike_mult = 1.8
+                st.session_state.v3_power_close_pos_min = 0.7
+                st.session_state.v3_power_body_pct_min = 0.55
+                st.session_state.v3_min_traded_value20 = 1_000_000.0
+                st.session_state.v3_require_rs_positive = False
+                st.session_state.v3_require_atr_contraction = False
+                st.session_state.v3_require_benchmark_trend = False
             elif selected_style == "Confirmed":
                 st.session_state.v3_signal_filter = "all"
                 st.session_state.v3_signal_lookback = 10
                 st.session_state.v3_max_runup_pct = None
                 st.session_state.v3_max_pullback_pct = 3.0
                 st.session_state.v3_retest_days = 5
+                st.session_state.v3_breakout_buffer_pct = 0.0
+                st.session_state.v3_volume_spike_mult = 1.8
+                st.session_state.v3_power_close_pos_min = 0.7
+                st.session_state.v3_power_body_pct_min = 0.55
+                st.session_state.v3_min_traded_value20 = 1_000_000.0
+                st.session_state.v3_require_rs_positive = False
+                st.session_state.v3_require_atr_contraction = False
+                st.session_state.v3_require_benchmark_trend = False
             elif selected_style == "Late":
                 st.session_state.v3_signal_filter = "late"
                 st.session_state.v3_signal_lookback = 10
                 st.session_state.v3_max_runup_pct = 5.0
                 st.session_state.v3_max_pullback_pct = 2.0
                 st.session_state.v3_retest_days = 0
+                st.session_state.v3_breakout_buffer_pct = 0.0
+                st.session_state.v3_volume_spike_mult = 1.8
+                st.session_state.v3_power_close_pos_min = 0.7
+                st.session_state.v3_power_body_pct_min = 0.55
+                st.session_state.v3_min_traded_value20 = 1_000_000.0
+                st.session_state.v3_require_rs_positive = False
+                st.session_state.v3_require_atr_contraction = False
+                st.session_state.v3_require_benchmark_trend = False
             else:
                 if selected_style == "Failed":
                     st.session_state.v3_signal_filter = "failed"
@@ -880,6 +976,14 @@ if not popup_mode:
                     st.session_state.v3_max_runup_pct = None
                     st.session_state.v3_max_pullback_pct = 2.0
                     st.session_state.v3_retest_days = 0
+                    st.session_state.v3_breakout_buffer_pct = 0.0
+                    st.session_state.v3_volume_spike_mult = 1.8
+                    st.session_state.v3_power_close_pos_min = 0.7
+                    st.session_state.v3_power_body_pct_min = 0.55
+                    st.session_state.v3_min_traded_value20 = 1_000_000.0
+                    st.session_state.v3_require_rs_positive = False
+                    st.session_state.v3_require_atr_contraction = False
+                    st.session_state.v3_require_benchmark_trend = False
 
             with st.spinner("Applying entry style..."):
                 if st.session_state.breakout_model == "v3tv":
@@ -896,6 +1000,7 @@ if not popup_mode:
                     max_pullback_pct=st.session_state.v3_max_pullback_pct,
                     retest_days=st.session_state.v3_retest_days,
                     max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
+                    **_v3_params_for_model(st.session_state.breakout_model),
                 )
                 if st.session_state.v3_signal_filter in {"late", "failed"}:
                     filtered = []
@@ -928,7 +1033,10 @@ if not popup_mode:
             f"V3 rules: {int(st.session_state.v3_signal_lookback)}d window, "
             f"run-up {'Off' if st.session_state.v3_max_runup_pct is None else str(st.session_state.v3_max_runup_pct) + '%'}, "
             f"pullback {'Off' if st.session_state.v3_max_pullback_pct is None else str(st.session_state.v3_max_pullback_pct) + '%'}, "
-            f"retest {'Off' if int(st.session_state.v3_retest_days) == 0 else str(int(st.session_state.v3_retest_days)) + 'd'}"
+            f"retest {'Off' if int(st.session_state.v3_retest_days) == 0 else str(int(st.session_state.v3_retest_days)) + 'd'}, "
+            f"buffer {float(st.session_state.v3_breakout_buffer_pct):.1f}%, "
+            f"vol {float(st.session_state.v3_volume_spike_mult):.1f}x, "
+            f"liq RM{int(float(st.session_state.v3_min_traded_value20)):,}"
         )
 
         st.sidebar.caption("Note: V3 is stricter than V1/V2. A stock can rank high in V1 but show no V3 signal if it lacks a recent power-candle + volume breakout.")
@@ -1034,6 +1142,7 @@ if not popup_mode:
                         max_pullback_pct=st.session_state.v3_max_pullback_pct,
                         retest_days=st.session_state.v3_retest_days,
                         max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
+                        **_v3_params_for_model(st.session_state.breakout_model),
                     )
                     _apply_watchlist([res['ticker'] for res in top_breakouts])
 
@@ -1057,6 +1166,7 @@ if not popup_mode:
                     max_pullback_pct=st.session_state.v3_max_pullback_pct,
                     retest_days=st.session_state.v3_retest_days,
                     max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
+                    **_v3_params_for_model(st.session_state.breakout_model),
                 )
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
             st.rerun()
@@ -1073,6 +1183,7 @@ if not popup_mode:
                 max_pullback_pct=st.session_state.v3_max_pullback_pct,
                 retest_days=st.session_state.v3_retest_days,
                 max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
+                **_v3_params_for_model(st.session_state.breakout_model),
             )
             if top_breakouts:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
@@ -1162,6 +1273,7 @@ if not popup_mode:
             max_pullback_pct=st.session_state.v3_max_pullback_pct,
             retest_days=st.session_state.v3_retest_days,
             max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
+            **_v3_params_for_model(st.session_state.breakout_model),
         )
         _apply_watchlist([res['ticker'] for res in top_breakouts])
         st.rerun()
@@ -1249,6 +1361,7 @@ with tab_stocks:
                         max_runup_pct=st.session_state.v3_max_runup_pct,
                         max_pullback_pct=st.session_state.v3_max_pullback_pct,
                         retest_days=st.session_state.v3_retest_days,
+                        **_v3_params_for_model("v3"),
                     )
                 elif breakout_model == "v3tv":
                     code = str(t).upper().strip().split(".")[0]

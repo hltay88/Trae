@@ -1434,7 +1434,25 @@ def analyze_breakout_v2(ticker, df, resolved_name=None, benchmark_df=None, min_r
     }
 
 
-def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_rows=120, signal_lookback=5, max_runup_pct=None, max_pullback_pct=None, retest_days=0):
+def analyze_breakout_v3(
+    ticker,
+    df,
+    resolved_name=None,
+    benchmark_df=None,
+    min_rows=120,
+    signal_lookback=5,
+    max_runup_pct=None,
+    max_pullback_pct=None,
+    retest_days=0,
+    breakout_buffer_pct: float | None = None,
+    volume_spike_mult: float | None = None,
+    power_close_pos_min: float | None = None,
+    power_body_pct_min: float | None = None,
+    min_traded_value20: float | None = None,
+    require_rs_positive: bool = False,
+    require_atr_contraction: bool = False,
+    require_benchmark_trend: bool = False,
+):
     if df is None or len(df) < min_rows:
         return None
 
@@ -1518,7 +1536,13 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
     try:
         if "Volume" in df.columns and len(df) >= 30:
             traded_value20 = float((df["Close"] * df["Volume"]).rolling(window=20).mean().shift(1).iloc[-1])
-            if traded_value20 >= 1_000_000:
+            min_tv = 1_000_000.0
+            try:
+                if min_traded_value20 is not None and str(min_traded_value20).strip() != "":
+                    min_tv = float(min_traded_value20)
+            except Exception:
+                min_tv = 1_000_000.0
+            if traded_value20 >= float(min_tv):
                 liquidity_ok = True
                 score += 1
     except Exception:
@@ -1532,6 +1556,42 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
         lookback_days = 1
     if lookback_days > 20:
         lookback_days = 20
+    buf_pct = 0.0
+    try:
+        if breakout_buffer_pct is not None and str(breakout_buffer_pct).strip() != "":
+            buf_pct = float(breakout_buffer_pct)
+    except Exception:
+        buf_pct = 0.0
+    if buf_pct < 0:
+        buf_pct = 0.0
+    vol_mult = 1.8
+    try:
+        if volume_spike_mult is not None and str(volume_spike_mult).strip() != "":
+            vol_mult = float(volume_spike_mult)
+    except Exception:
+        vol_mult = 1.8
+    if vol_mult < 1.0:
+        vol_mult = 1.0
+    close_pos_min = 0.7
+    try:
+        if power_close_pos_min is not None and str(power_close_pos_min).strip() != "":
+            close_pos_min = float(power_close_pos_min)
+    except Exception:
+        close_pos_min = 0.7
+    if close_pos_min < 0.0:
+        close_pos_min = 0.0
+    if close_pos_min > 1.0:
+        close_pos_min = 1.0
+    body_pct_min = 0.55
+    try:
+        if power_body_pct_min is not None and str(power_body_pct_min).strip() != "":
+            body_pct_min = float(power_body_pct_min)
+    except Exception:
+        body_pct_min = 0.55
+    if body_pct_min < 0.0:
+        body_pct_min = 0.0
+    if body_pct_min > 1.0:
+        body_pct_min = 1.0
 
     try:
         if "Volume" in df.columns and len(df) >= (breakout_lookback + lookback_days + 1):
@@ -1550,7 +1610,10 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
                     continue
 
                 prior_close_high = float(df["Close"].iloc[i - breakout_lookback : i].max())
-                is_breakout_55 = close_i > prior_close_high
+                thr = float(prior_close_high)
+                if float(buf_pct) > 0.0:
+                    thr = float(prior_close_high) * (1.0 + (float(buf_pct) / 100.0))
+                is_breakout_55 = close_i > thr
                 if not is_breakout_55:
                     continue
 
@@ -1567,7 +1630,7 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
                     if high_i > low_i:
                         close_pos = (close_i - low_i) / (high_i - low_i)
                         body_pct = abs(close_i - open_i) / (high_i - low_i)
-                        if close_i > open_i and close_pos >= 0.7 and body_pct >= 0.55:
+                        if close_i > open_i and close_pos >= float(close_pos_min) and body_pct >= float(body_pct_min):
                             is_power = True
                 except Exception:
                     is_power = False
@@ -1578,7 +1641,7 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
                 try:
                     avg_i = float(avg20_prev.iloc[i])
                     vol_i = float(vols.iloc[i])
-                    if avg_i > 0 and vol_i >= avg_i * 1.8:
+                    if avg_i > 0 and vol_i >= avg_i * float(vol_mult):
                         is_vol_spike = True
                 except Exception:
                     is_vol_spike = False
@@ -1632,7 +1695,10 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
         try:
             if len(df) >= breakout_lookback + 5:
                 prior_high = float(df["Close"].iloc[-breakout_lookback:-1].max())
-                if current_close > prior_high:
+                thr = float(prior_high)
+                if float(buf_pct) > 0.0:
+                    thr = float(prior_high) * (1.0 + (float(buf_pct) / 100.0))
+                if current_close > thr:
                     breakout_55 = True
                     score += 2
         except Exception:
@@ -1676,6 +1742,28 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
                             score += 1
     except Exception:
         pass
+    if bool(require_rs_positive):
+        try:
+            if rs_3m is None or not (float(rs_3m) > 0.0):
+                return None
+        except Exception:
+            return None
+
+    bench_trend_ok = None
+    if bool(require_benchmark_trend):
+        try:
+            if benchmark_df is not None and not benchmark_df.empty and "Close" in benchmark_df.columns:
+                b = pd.to_numeric(benchmark_df["Close"], errors="coerce").dropna()
+                if len(b) >= 60:
+                    sma_b = SMAIndicator(b, window=50).sma_indicator()
+                    b_now = float(b.iloc[-1])
+                    sma_now = float(sma_b.iloc[-1])
+                    sma_prev = float(sma_b.iloc[-6])
+                    bench_trend_ok = bool(b_now > sma_now and sma_now > sma_prev)
+        except Exception:
+            bench_trend_ok = None
+        if bench_trend_ok is False:
+            return None
 
     atr_contraction = False
     try:
@@ -1698,6 +1786,8 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
                 score += 1
     except Exception:
         pass
+    if bool(require_atr_contraction) and (not bool(atr_contraction)):
+        return None
 
     code, name, sector, analysis, catalyst = _resolve_insight_v3(ticker, resolved_name)
 
@@ -1769,6 +1859,7 @@ def analyze_breakout_v3(ticker, df, resolved_name=None, benchmark_df=None, min_r
         "catalyst": catalyst,
         "rs_3m": None if rs_3m is None else float(rs_3m),
         "atr_contraction": bool(atr_contraction),
+        "bench_trend_ok": None if bench_trend_ok is None else bool(bench_trend_ok),
         "breakout_55": bool(breakout_55),
         "power_candle": bool(power_candle),
         "volume_spike": bool(volume_spike),
@@ -2980,7 +3071,26 @@ def get_futures_breakouts():
             results.append(analysis)
     return results
 
-def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=None, sector_allowlist=None, signal_lookback=5, max_runup_pct=None, max_pullback_pct=None, retest_days=0, max_tickers=None):
+def get_top_breakouts(
+    limit=10,
+    model="v2",
+    universe_mode="curated",
+    universe=None,
+    sector_allowlist=None,
+    signal_lookback=5,
+    max_runup_pct=None,
+    max_pullback_pct=None,
+    retest_days=0,
+    max_tickers=None,
+    breakout_buffer_pct: float | None = None,
+    volume_spike_mult: float | None = None,
+    power_close_pos_min: float | None = None,
+    power_body_pct_min: float | None = None,
+    min_traded_value20: float | None = None,
+    require_rs_positive: bool = False,
+    require_atr_contraction: bool = False,
+    require_benchmark_trend: bool = False,
+):
     """
     Scans a stock universe and returns the top N stocks 
     based on their breakout scores.
@@ -2988,7 +3098,7 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
     all_results = []
     benchmark_df = None
     m = str(model).lower()
-    if m == "v2":
+    if m in {"v2", "v3"}:
         try:
             bench = yf.Ticker("^KLSE")
             benchmark_df = bench.history(period="1y")
@@ -3108,7 +3218,25 @@ def get_top_breakouts(limit=10, model="v2", universe_mode="curated", universe=No
             continue
 
         if m == "v3":
-            analysis = analyze_breakout_v3(ticker, df, resolved_name, benchmark_df=benchmark_df, min_rows=120, signal_lookback=signal_lookback, max_runup_pct=max_runup_pct, max_pullback_pct=max_pullback_pct, retest_days=retest_days)
+            analysis = analyze_breakout_v3(
+                ticker,
+                df,
+                resolved_name,
+                benchmark_df=benchmark_df,
+                min_rows=120,
+                signal_lookback=signal_lookback,
+                max_runup_pct=max_runup_pct,
+                max_pullback_pct=max_pullback_pct,
+                retest_days=retest_days,
+                breakout_buffer_pct=breakout_buffer_pct,
+                volume_spike_mult=volume_spike_mult,
+                power_close_pos_min=power_close_pos_min,
+                power_body_pct_min=power_body_pct_min,
+                min_traded_value20=min_traded_value20,
+                require_rs_positive=bool(require_rs_positive),
+                require_atr_contraction=bool(require_atr_contraction),
+                require_benchmark_trend=bool(require_benchmark_trend),
+            )
         elif m == "v2":
             analysis = analyze_breakout_v2(ticker, df, resolved_name, benchmark_df=benchmark_df, min_rows=120)
         else:
