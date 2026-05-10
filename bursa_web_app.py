@@ -420,9 +420,9 @@ popup_mode = _get_query_param("popup")
 _require_login(bool(popup_mode))
 
 if "breakout_model" not in st.session_state:
-    st.session_state.breakout_model = "v2"
+    st.session_state.breakout_model = "v3tv"
 if "universe_mode" not in st.session_state:
-    st.session_state.universe_mode = "curated"
+    st.session_state.universe_mode = "focus"
 if "sector_focus" not in st.session_state:
     st.session_state.sector_focus = []
 if "v3_signal_lookback" not in st.session_state:
@@ -444,9 +444,9 @@ if "v3tv_only_near_breakout" not in st.session_state:
 if "v3tv_require_daily_vol_surge" not in st.session_state:
     st.session_state.v3tv_require_daily_vol_surge = True
 if "v3tv_daily_vol_mult" not in st.session_state:
-    st.session_state.v3tv_daily_vol_mult = 1.5
+    st.session_state.v3tv_daily_vol_mult = 1.8
 if "v3tv_min_traded_value20" not in st.session_state:
-    st.session_state.v3tv_min_traded_value20 = 1_000_000.0
+    st.session_state.v3tv_min_traded_value20 = 2_000_000.0
 if "v3_breakout_buffer_pct" not in st.session_state:
     st.session_state.v3_breakout_buffer_pct = 0.0
 if "v3_volume_spike_mult" not in st.session_state:
@@ -593,15 +593,15 @@ def _v3tv_params_for_model(model_key: str) -> dict:
         return {
             "v3tv_proximity_pct": float(st.session_state.get("v3tv_proximity_pct") or 0.5),
             "v3tv_require_daily_vol_surge": bool(st.session_state.get("v3tv_require_daily_vol_surge")),
-            "v3tv_daily_vol_mult": float(st.session_state.get("v3tv_daily_vol_mult") or 1.5),
-            "v3tv_min_traded_value20": float(st.session_state.get("v3tv_min_traded_value20") or 1_000_000.0),
+            "v3tv_daily_vol_mult": float(st.session_state.get("v3tv_daily_vol_mult") or 1.8),
+            "v3tv_min_traded_value20": float(st.session_state.get("v3tv_min_traded_value20") or 2_000_000.0),
         }
     except Exception:
         return {
             "v3tv_proximity_pct": 0.5,
             "v3tv_require_daily_vol_surge": True,
-            "v3tv_daily_vol_mult": 1.5,
-            "v3tv_min_traded_value20": 1_000_000.0,
+            "v3tv_daily_vol_mult": 1.8,
+            "v3tv_min_traded_value20": 2_000_000.0,
         }
 
 def _scan_params_for_model(model_key: str) -> dict:
@@ -858,8 +858,8 @@ if not popup_mode:
         st.session_state.v3tv_proximity_pct = 0.5
         st.session_state.v3tv_only_near_breakout = True
         st.session_state.v3tv_require_daily_vol_surge = True
-        st.session_state.v3tv_daily_vol_mult = 1.5
-        st.session_state.v3tv_min_traded_value20 = 1_000_000.0
+        st.session_state.v3tv_daily_vol_mult = 1.8
+        st.session_state.v3tv_min_traded_value20 = 2_000_000.0
         st.session_state.v3_entry_style = "Early Entry"
         st.session_state.v3_max_runup_pct = 5.0
         st.session_state.v3_show_watchlist_all = False
@@ -892,53 +892,55 @@ if not popup_mode:
 
     if st.session_state.breakout_model == "v3tv":
         if "intraday_max_tickers" not in st.session_state:
-            st.session_state.intraday_max_tickers = 50
-        st.session_state.intraday_max_tickers = st.sidebar.slider(
-            "Intraday max tickers",
-            min_value=10,
-            max_value=200,
-            value=int(st.session_state.intraday_max_tickers),
-            step=10,
-            help="V3tv uses TradingView last price (no token). Keep this smaller to reduce rate limits.",
-        )
-        st.session_state.v3tv_proximity_pct = st.sidebar.slider(
-            "Near-breakout % (early alert)",
-            min_value=0.2,
-            max_value=3.0,
-            value=float(st.session_state.v3tv_proximity_pct),
-            step=0.1,
-            help="Shows stocks whose live price is within this % below the 55-day breakout level.",
-        )
-        st.session_state.v3tv_only_near_breakout = st.sidebar.toggle(
-            "Show only Breakout / Near-breakout",
-            value=bool(st.session_state.v3tv_only_near_breakout),
-            help="Hides watch-only rows so you can focus on early-entry setups and live breakouts.",
-        )
-        st.session_state.v3tv_require_daily_vol_surge = st.sidebar.toggle(
-            "Require strong daily volume",
-            value=bool(st.session_state.v3tv_require_daily_vol_surge),
-            help="Applies to 🟡 NEAR only (early alerts). Live ⚡ BREAKOUT will still show even if daily volume is not strong.",
-        )
-        st.session_state.v3tv_daily_vol_mult = st.sidebar.slider(
-            "Daily volume spike x",
-            min_value=1.0,
-            max_value=3.0,
-            value=float(st.session_state.v3tv_daily_vol_mult),
-            step=0.1,
-            help="Volume(last daily bar) / average volume(20 days). Higher = stricter.",
-        )
-        st.session_state.v3tv_min_traded_value20 = st.sidebar.number_input(
-            "Min traded value (RM, avg20)",
-            min_value=0.0,
-            value=float(st.session_state.v3tv_min_traded_value20),
-            step=100000.0,
-            format="%.0f",
-            help="Filters out illiquid counters using average 20-day traded value (Close*Volume).",
-        )
+            st.session_state.intraday_max_tickers = 20
+        st.sidebar.caption("V3tv (Early Entry) default: 20 stocks • NEAR=0.5% • Vol>=1.8x • TV20>=RM2.0m")
+        with st.sidebar.expander("Advanced (optional)", expanded=False):
+            st.session_state.intraday_max_tickers = st.sidebar.slider(
+                "Intraday max tickers",
+                min_value=10,
+                max_value=200,
+                value=int(st.session_state.intraday_max_tickers),
+                step=10,
+                help="V3tv uses TradingView last price (no token). Keep this smaller to reduce rate limits.",
+            )
+            st.session_state.v3tv_proximity_pct = st.sidebar.slider(
+                "Near-breakout % (early alert)",
+                min_value=0.2,
+                max_value=3.0,
+                value=float(st.session_state.v3tv_proximity_pct),
+                step=0.1,
+                help="Shows stocks whose live price is within this % below the 55-day breakout level.",
+            )
+            st.session_state.v3tv_only_near_breakout = st.sidebar.toggle(
+                "Show only Breakout / Near-breakout",
+                value=bool(st.session_state.v3tv_only_near_breakout),
+                help="Hides watch-only rows so you can focus on early-entry setups and live breakouts.",
+            )
+            st.session_state.v3tv_require_daily_vol_surge = st.sidebar.toggle(
+                "Require strong daily volume",
+                value=bool(st.session_state.v3tv_require_daily_vol_surge),
+                help="Applies to 🟡 NEAR only (early alerts). Live ⚡ BREAKOUT will still show even if daily volume is not strong.",
+            )
+            st.session_state.v3tv_daily_vol_mult = st.sidebar.slider(
+                "Daily volume spike x",
+                min_value=1.0,
+                max_value=3.0,
+                value=float(st.session_state.v3tv_daily_vol_mult),
+                step=0.1,
+                help="Volume(last daily bar) / average volume(20 days). Higher = stricter.",
+            )
+            st.session_state.v3tv_min_traded_value20 = st.sidebar.number_input(
+                "Min traded value (RM, avg20)",
+                min_value=0.0,
+                value=float(st.session_state.v3tv_min_traded_value20),
+                step=100000.0,
+                format="%.0f",
+                help="Filters out illiquid counters using average 20-day traded value (Close*Volume).",
+            )
         st.sidebar.caption("V3tv uses TradingView last price (no token). Results depend on TradingView availability in your environment.")
 
 
-    if st.session_state.breakout_model in {"v3", "v3tv"}:
+    if st.session_state.breakout_model == "v3":
         if "v3_entry_style" not in st.session_state:
             st.session_state.v3_entry_style = "Early Entry"
         if "v3_signal_filter" not in st.session_state:
@@ -949,7 +951,6 @@ if not popup_mode:
             st.session_state.v3_signals_only = True
 
         entry_options = [
-            "Genuine (Strict)",
             "Early Entry (Recommended)",
             "Balanced",
             "Confirmed",
@@ -958,25 +959,21 @@ if not popup_mode:
             "Custom (Manual)",
         ]
         entry_idx = 0
-        if str(st.session_state.v3_entry_style).startswith("Genuine"):
+        if str(st.session_state.v3_entry_style).startswith("Early"):
             entry_idx = 0
-        elif str(st.session_state.v3_entry_style).startswith("Early"):
-            entry_idx = 1
         elif str(st.session_state.v3_entry_style).startswith("Balanced"):
-            entry_idx = 2
+            entry_idx = 1
         elif str(st.session_state.v3_entry_style).startswith("Confirmed"):
-            entry_idx = 3
+            entry_idx = 2
         elif str(st.session_state.v3_entry_style).startswith("Late"):
-            entry_idx = 4
+            entry_idx = 3
         elif str(st.session_state.v3_entry_style).startswith("Failed"):
-            entry_idx = 5
+            entry_idx = 4
         elif str(st.session_state.v3_entry_style).startswith("Custom"):
-            entry_idx = 6
+            entry_idx = 5
 
         entry_label = st.sidebar.selectbox("Entry Style", entry_options, index=entry_idx)
-        if entry_label.startswith("Genuine"):
-            selected_style = "Genuine"
-        elif entry_label.startswith("Early"):
+        if entry_label.startswith("Early"):
             selected_style = "Early Entry"
         elif entry_label.startswith("Balanced"):
             selected_style = "Balanced"
@@ -992,21 +989,7 @@ if not popup_mode:
         if selected_style != st.session_state.v3_entry_style:
             st.session_state.v3_entry_style = selected_style
 
-            if selected_style == "Genuine":
-                st.session_state.v3_signal_filter = "all"
-                st.session_state.v3_signal_lookback = 5
-                st.session_state.v3_max_runup_pct = 4.0
-                st.session_state.v3_max_pullback_pct = 1.5
-                st.session_state.v3_retest_days = 3
-                st.session_state.v3_breakout_buffer_pct = 0.5
-                st.session_state.v3_volume_spike_mult = 2.0
-                st.session_state.v3_power_close_pos_min = 0.75
-                st.session_state.v3_power_body_pct_min = 0.6
-                st.session_state.v3_min_traded_value20 = 2_000_000.0
-                st.session_state.v3_require_rs_positive = True
-                st.session_state.v3_require_atr_contraction = True
-                st.session_state.v3_require_benchmark_trend = True
-            elif selected_style == "Early Entry":
+            if selected_style == "Early Entry":
                 st.session_state.v3_signal_filter = "all"
                 st.session_state.v3_signal_lookback = 5
                 st.session_state.v3_max_runup_pct = 5.0
@@ -1079,17 +1062,17 @@ if not popup_mode:
                     st.session_state.v3_require_benchmark_trend = False
 
             with st.spinner("Applying entry style..."):
-                if st.session_state.breakout_model == "v3tv":
+                if st.session_state.v3_signal_filter in {"late", "failed"}:
+                    scan_limit = 9999
+                else:
                     try:
-                        scan_limit = int(st.session_state.get("top_results_limit") or 50)
+                        scan_limit = int(st.session_state.get("top_results_limit") or 20)
                     except Exception:
-                        scan_limit = 50
+                        scan_limit = 20
                     if scan_limit < 10:
                         scan_limit = 10
                     if scan_limit > 200:
                         scan_limit = 200
-                else:
-                    scan_limit = 9999 if st.session_state.v3_signal_filter in {"late", "failed"} else 20
                 top_breakouts = get_top_breakouts(
                     limit=scan_limit,
                     model=st.session_state.breakout_model,
