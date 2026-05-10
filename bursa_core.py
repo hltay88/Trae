@@ -2151,6 +2151,171 @@ def analyze_breakout_v3_quote(ticker: str, daily_df: pd.DataFrame, quote: dict, 
         "model": "v3tv",
     }
 
+
+def analyze_breakout_v3_quote_setup(
+    ticker: str,
+    daily_df: pd.DataFrame,
+    quote: dict,
+    resolved_name: str | None = None,
+    max_runup_pct: float | None = 5.0,
+    proximity_pct: float | None = 1.0,
+    require_daily_vol_surge: bool = False,
+    daily_vol_mult: float | None = 1.5,
+    min_traded_value20: float | None = 1_000_000.0,
+):
+    if daily_df is None or daily_df.empty or not isinstance(quote, dict):
+        return None
+
+    ticker = str(ticker or "").upper().strip()
+    df_d = daily_df.copy()
+    if "Close" in df_d.columns:
+        df_d["Close"] = pd.to_numeric(df_d["Close"], errors="coerce")
+    df_d = df_d.dropna(subset=["Close"]).copy()
+    if df_d.empty:
+        return None
+
+    breakout_lookback = 55
+    if len(df_d) < breakout_lookback + 5:
+        return None
+    try:
+        breakout_level = float(df_d["Close"].iloc[-breakout_lookback:-1].max())
+        if not (breakout_level > 0.0):
+            return None
+    except Exception:
+        return None
+
+    try:
+        last_price = float(quote.get("ld"))
+        if not (last_price > 0.0):
+            return None
+    except Exception:
+        return None
+
+    ts = None
+    try:
+        t_ms = quote.get("t")
+        if t_ms is not None:
+            ts = pd.to_datetime(int(t_ms), unit="ms", utc=True).tz_convert("Asia/Kuala_Lumpur")
+    except Exception:
+        ts = None
+    if ts is None:
+        ts = pd.Timestamp.now(tz="Asia/Kuala_Lumpur")
+
+    vol_ratio = None
+    tv20 = None
+    daily_vol_ok = None
+    liq_ok = None
+    try:
+        if "Volume" in df_d.columns:
+            vols = pd.to_numeric(df_d["Volume"], errors="coerce")
+            avg20_prev = vols.rolling(window=20).mean().shift(1)
+            try:
+                v_last = float(vols.iloc[-1])
+                v_avg = float(avg20_prev.iloc[-1])
+                if v_avg > 0:
+                    vol_ratio = float(v_last / v_avg)
+            except Exception:
+                vol_ratio = None
+            try:
+                tv20_v = (pd.to_numeric(df_d["Close"], errors="coerce") * vols).rolling(window=20).mean().shift(1).iloc[-1]
+                if tv20_v == tv20_v:
+                    tv20 = float(tv20_v)
+            except Exception:
+                tv20 = None
+    except Exception:
+        vol_ratio = None
+        tv20 = None
+    try:
+        mult = float(daily_vol_mult) if daily_vol_mult is not None else 1.5
+    except Exception:
+        mult = 1.5
+    if mult < 1.0:
+        mult = 1.0
+    if vol_ratio is not None:
+        daily_vol_ok = bool(float(vol_ratio) >= float(mult))
+    try:
+        min_tv = float(min_traded_value20) if min_traded_value20 is not None else 1_000_000.0
+    except Exception:
+        min_tv = 1_000_000.0
+    if min_tv < 0:
+        min_tv = 0.0
+    if tv20 is not None:
+        liq_ok = bool(float(tv20) >= float(min_tv))
+
+    if last_price > breakout_level:
+        res = analyze_breakout_v3_quote(
+            ticker,
+            df_d,
+            quote,
+            resolved_name=resolved_name,
+            max_runup_pct=max_runup_pct,
+        )
+        if isinstance(res, dict):
+            if vol_ratio is not None:
+                res["daily_vol_ratio"] = float(vol_ratio)
+            if tv20 is not None:
+                res["daily_traded_value20"] = float(tv20)
+            if daily_vol_ok is not None:
+                res["daily_vol_ok"] = bool(daily_vol_ok)
+            if liq_ok is not None:
+                res["liquidity_ok"] = bool(liq_ok)
+        return res
+
+    prox = None
+    try:
+        if proximity_pct is not None and str(proximity_pct).strip() != "":
+            prox = float(proximity_pct)
+    except Exception:
+        prox = None
+    if prox is None or prox <= 0:
+        return None
+
+    floor = float(breakout_level) * (1.0 - (float(prox) / 100.0))
+    if not (last_price >= floor):
+        return None
+
+    if bool(require_daily_vol_surge):
+        if daily_vol_ok is not True:
+            return None
+        if liq_ok is False:
+            return None
+
+    dist_pct = ((float(last_price) / float(breakout_level)) - 1.0) * 100.0
+    code, name, sector, analysis, catalyst = _resolve_insight_v3(ticker, resolved_name)
+    return {
+        "ticker": ticker,
+        "name": name,
+        "sector": sector,
+        "price": float(last_price),
+        "rsi": 50.0,
+        "score": 0,
+        "score_max": 7,
+        "breakout_55": False,
+        "breakout_candle": False,
+        "breakout_candle_valid": False,
+        "breakout_hold_ok": None,
+        "runup_pct": float(dist_pct),
+        "max_runup_pct": None,
+        "max_pullback_pct": None,
+        "retest_days": 0,
+        "retest_confirmed": False,
+        "breakout_candle_date": pd.Timestamp(ts).date().isoformat(),
+        "breakout_candle_age": 0,
+        "breakout_level": float(breakout_level),
+        "power_candle": None,
+        "volume_spike": None,
+        "liquidity_ok": True if liq_ok is None else bool(liq_ok),
+        "analysis": analysis,
+        "catalyst": catalyst,
+        "near_breakout": True,
+        "distance_to_breakout_pct": float(dist_pct),
+        "proximity_pct": float(prox),
+        "daily_vol_ratio": None if vol_ratio is None else float(vol_ratio),
+        "daily_traded_value20": None if tv20 is None else float(tv20),
+        "daily_vol_ok": None if daily_vol_ok is None else bool(daily_vol_ok),
+        "model": "v3tv",
+    }
+
 # --- KLCI COMPONENTS (Top 30 Stocks) ---
 KLCI_COMPONENTS = [
     "1155.KL", "1295.KL", "1023.KL", "5347.KL", "5183.KL", 
@@ -3090,6 +3255,10 @@ def get_top_breakouts(
     require_rs_positive: bool = False,
     require_atr_contraction: bool = False,
     require_benchmark_trend: bool = False,
+    v3tv_proximity_pct: float | None = None,
+    v3tv_require_daily_vol_surge: bool = False,
+    v3tv_daily_vol_mult: float | None = 1.5,
+    v3tv_min_traded_value20: float | None = 1_000_000.0,
 ):
     """
     Scans a stock universe and returns the top N stocks 
@@ -3122,6 +3291,21 @@ def get_top_breakouts(
     if m in {"v3", "v3tv"} and sector_allowlist:
         allow = {str(x).strip().lower() for x in sector_allowlist if str(x).strip()}
     if m == "v3tv":
+        prox = None
+        try:
+            if v3tv_proximity_pct is not None and str(v3tv_proximity_pct).strip() != "":
+                prox = float(v3tv_proximity_pct)
+        except Exception:
+            prox = None
+        require_vol = bool(v3tv_require_daily_vol_surge)
+        try:
+            v_mult = float(v3tv_daily_vol_mult) if v3tv_daily_vol_mult is not None else 1.5
+        except Exception:
+            v_mult = 1.5
+        try:
+            tv_min = float(v3tv_min_traded_value20) if v3tv_min_traded_value20 is not None else 1_000_000.0
+        except Exception:
+            tv_min = 1_000_000.0
         for ticker in tickers:
             if allow:
                 t = str(ticker).upper().strip()
@@ -3158,15 +3342,26 @@ def get_top_breakouts(
                 q = {"ld": float(live), "t": int(time.time() * 1000)}
             except Exception:
                 continue
-            analysis = analyze_breakout_v3_quote(ticker, df, q, resolved_name=resolved_name, max_runup_pct=max_runup_pct)
+            analysis = analyze_breakout_v3_quote_setup(
+                ticker,
+                df,
+                q,
+                resolved_name=resolved_name,
+                max_runup_pct=max_runup_pct,
+                proximity_pct=prox if prox is not None else 1.0,
+                require_daily_vol_surge=require_vol,
+                daily_vol_mult=v_mult,
+                min_traded_value20=tv_min,
+            )
             if analysis:
                 all_results.append(analysis)
 
         all_results.sort(
             key=lambda x: (
                 bool(x.get("breakout_candle_valid")),
+                bool(x.get("near_breakout")),
                 int(x.get("score", 0)),
-                -float(x.get("runup_pct", 0.0) or 0.0),
+                -abs(float(x.get("distance_to_breakout_pct", x.get("runup_pct", 0.0) or 0.0) or 0.0)),
             ),
             reverse=True,
         )

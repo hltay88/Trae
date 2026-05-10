@@ -30,6 +30,7 @@ analyze_breakout = _core.analyze_breakout
 analyze_breakout_v2 = _core.analyze_breakout_v2
 analyze_breakout_v3 = _core.analyze_breakout_v3
 analyze_breakout_v3_quote = getattr(_core, "analyze_breakout_v3_quote", None)
+analyze_breakout_v3_quote_setup = getattr(_core, "analyze_breakout_v3_quote_setup", None)
 search_bursa = _core.search_bursa
 get_top_breakouts = _core.get_top_breakouts
 get_stock_universe = _core.get_stock_universe
@@ -436,6 +437,16 @@ if "max_tickers_scan" not in st.session_state:
     st.session_state.max_tickers_scan = 300
 if "top_results_limit" not in st.session_state:
     st.session_state.top_results_limit = 20
+if "v3tv_proximity_pct" not in st.session_state:
+    st.session_state.v3tv_proximity_pct = 0.5
+if "v3tv_only_near_breakout" not in st.session_state:
+    st.session_state.v3tv_only_near_breakout = True
+if "v3tv_require_daily_vol_surge" not in st.session_state:
+    st.session_state.v3tv_require_daily_vol_surge = True
+if "v3tv_daily_vol_mult" not in st.session_state:
+    st.session_state.v3tv_daily_vol_mult = 1.5
+if "v3tv_min_traded_value20" not in st.session_state:
+    st.session_state.v3tv_min_traded_value20 = 1_000_000.0
 if "v3_breakout_buffer_pct" not in st.session_state:
     st.session_state.v3_breakout_buffer_pct = 0.0
 if "v3_volume_spike_mult" not in st.session_state:
@@ -571,6 +582,40 @@ def _v3_params_for_model(model_key: str) -> dict:
     except Exception:
         return {}
 
+def _v3tv_params_for_model(model_key: str) -> dict:
+    try:
+        m = str(model_key or "").lower().strip()
+    except Exception:
+        m = ""
+    if m != "v3tv":
+        return {}
+    try:
+        return {
+            "v3tv_proximity_pct": float(st.session_state.get("v3tv_proximity_pct") or 0.5),
+            "v3tv_require_daily_vol_surge": bool(st.session_state.get("v3tv_require_daily_vol_surge")),
+            "v3tv_daily_vol_mult": float(st.session_state.get("v3tv_daily_vol_mult") or 1.5),
+            "v3tv_min_traded_value20": float(st.session_state.get("v3tv_min_traded_value20") or 1_000_000.0),
+        }
+    except Exception:
+        return {
+            "v3tv_proximity_pct": 0.5,
+            "v3tv_require_daily_vol_surge": True,
+            "v3tv_daily_vol_mult": 1.5,
+            "v3tv_min_traded_value20": 1_000_000.0,
+        }
+
+def _scan_params_for_model(model_key: str) -> dict:
+    out = {}
+    try:
+        out.update(_v3_params_for_model(model_key))
+    except Exception:
+        pass
+    try:
+        out.update(_v3tv_params_for_model(model_key))
+    except Exception:
+        pass
+    return out
+
 
 # Initialize session state for watchlist
 if 'watchlist' not in st.session_state:
@@ -593,7 +638,7 @@ if 'watchlist' not in st.session_state:
             max_pullback_pct=st.session_state.v3_max_pullback_pct,
             retest_days=st.session_state.v3_retest_days,
             max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-            **_v3_params_for_model(st.session_state.breakout_model),
+            **_scan_params_for_model(st.session_state.breakout_model),
         )
         if top_breakouts:
             _apply_watchlist([res['ticker'] for res in top_breakouts])
@@ -635,7 +680,7 @@ if not popup_mode:
                 max_pullback_pct=st.session_state.v3_max_pullback_pct,
                 retest_days=st.session_state.v3_retest_days,
                 max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-                **_v3_params_for_model(st.session_state.breakout_model),
+                **_scan_params_for_model(st.session_state.breakout_model),
             )
             if top_breakouts:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
@@ -691,7 +736,7 @@ if not popup_mode:
                 max_pullback_pct=st.session_state.v3_max_pullback_pct,
                 retest_days=st.session_state.v3_retest_days,
                 max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-                **_v3_params_for_model(st.session_state.breakout_model),
+                **_scan_params_for_model(st.session_state.breakout_model),
             )
             if top_breakouts:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
@@ -765,7 +810,7 @@ if not popup_mode:
                         max_runup_pct=st.session_state.v3_max_runup_pct,
                         max_pullback_pct=st.session_state.v3_max_pullback_pct,
                         retest_days=st.session_state.v3_retest_days,
-                        **_v3_params_for_model(st.session_state.breakout_model),
+                        **_scan_params_for_model(st.session_state.breakout_model),
                     )
                     _apply_watchlist([res['ticker'] for res in top_breakouts])
                 st.rerun()
@@ -788,7 +833,7 @@ if not popup_mode:
                     max_pullback_pct=st.session_state.v3_max_pullback_pct,
                     retest_days=st.session_state.v3_retest_days,
                     max_tickers=st.session_state.max_tickers_scan,
-                    **_v3_params_for_model(st.session_state.breakout_model),
+                    **_scan_params_for_model(st.session_state.breakout_model),
                 )
                 if top_breakouts:
                     _apply_watchlist([res['ticker'] for res in top_breakouts])
@@ -805,6 +850,20 @@ if not popup_mode:
         index=0 if st.session_state.breakout_model == "v3" else (1 if st.session_state.breakout_model == "v3tv" else (2 if st.session_state.breakout_model == "v2" else 3)),
         horizontal=True,
     )
+    if st.sidebar.button("⚡ Early Entry Live (Simple)", use_container_width=True):
+        st.session_state.breakout_model = "v3tv"
+        st.session_state.universe_mode = "focus"
+        st.session_state.top_results_limit = 20
+        st.session_state.intraday_max_tickers = 20
+        st.session_state.v3tv_proximity_pct = 0.5
+        st.session_state.v3tv_only_near_breakout = True
+        st.session_state.v3tv_require_daily_vol_surge = True
+        st.session_state.v3tv_daily_vol_mult = 1.5
+        st.session_state.v3tv_min_traded_value20 = 1_000_000.0
+        st.session_state.v3_entry_style = "Early Entry"
+        st.session_state.v3_max_runup_pct = 5.0
+        st.session_state.v3_show_watchlist_all = False
+        st.rerun()
     if model_label.startswith("Intraday (No Token)"):
         selected_model = "v3tv"
     else:
@@ -822,7 +881,7 @@ if not popup_mode:
                 max_pullback_pct=st.session_state.v3_max_pullback_pct,
                 retest_days=st.session_state.v3_retest_days,
                 max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-                **_v3_params_for_model(st.session_state.breakout_model),
+                **_scan_params_for_model(st.session_state.breakout_model),
             )
             if top_breakouts:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
@@ -841,6 +900,40 @@ if not popup_mode:
             value=int(st.session_state.intraday_max_tickers),
             step=10,
             help="V3tv uses TradingView last price (no token). Keep this smaller to reduce rate limits.",
+        )
+        st.session_state.v3tv_proximity_pct = st.sidebar.slider(
+            "Near-breakout % (early alert)",
+            min_value=0.2,
+            max_value=3.0,
+            value=float(st.session_state.v3tv_proximity_pct),
+            step=0.1,
+            help="Shows stocks whose live price is within this % below the 55-day breakout level.",
+        )
+        st.session_state.v3tv_only_near_breakout = st.sidebar.toggle(
+            "Show only Breakout / Near-breakout",
+            value=bool(st.session_state.v3tv_only_near_breakout),
+            help="Hides watch-only rows so you can focus on early-entry setups and live breakouts.",
+        )
+        st.session_state.v3tv_require_daily_vol_surge = st.sidebar.toggle(
+            "Require strong daily volume",
+            value=bool(st.session_state.v3tv_require_daily_vol_surge),
+            help="Applies to 🟡 NEAR only (early alerts). Live ⚡ BREAKOUT will still show even if daily volume is not strong.",
+        )
+        st.session_state.v3tv_daily_vol_mult = st.sidebar.slider(
+            "Daily volume spike x",
+            min_value=1.0,
+            max_value=3.0,
+            value=float(st.session_state.v3tv_daily_vol_mult),
+            step=0.1,
+            help="Volume(last daily bar) / average volume(20 days). Higher = stricter.",
+        )
+        st.session_state.v3tv_min_traded_value20 = st.sidebar.number_input(
+            "Min traded value (RM, avg20)",
+            min_value=0.0,
+            value=float(st.session_state.v3tv_min_traded_value20),
+            step=100000.0,
+            format="%.0f",
+            help="Filters out illiquid counters using average 20-day traded value (Close*Volume).",
         )
         st.sidebar.caption("V3tv uses TradingView last price (no token). Results depend on TradingView availability in your environment.")
 
@@ -987,7 +1080,14 @@ if not popup_mode:
 
             with st.spinner("Applying entry style..."):
                 if st.session_state.breakout_model == "v3tv":
-                    scan_limit = 20
+                    try:
+                        scan_limit = int(st.session_state.get("top_results_limit") or 50)
+                    except Exception:
+                        scan_limit = 50
+                    if scan_limit < 10:
+                        scan_limit = 10
+                    if scan_limit > 200:
+                        scan_limit = 200
                 else:
                     scan_limit = 9999 if st.session_state.v3_signal_filter in {"late", "failed"} else 20
                 top_breakouts = get_top_breakouts(
@@ -1000,7 +1100,7 @@ if not popup_mode:
                     max_pullback_pct=st.session_state.v3_max_pullback_pct,
                     retest_days=st.session_state.v3_retest_days,
                     max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-                    **_v3_params_for_model(st.session_state.breakout_model),
+                    **_scan_params_for_model(st.session_state.breakout_model),
                 )
                 if st.session_state.v3_signal_filter in {"late", "failed"}:
                     filtered = []
@@ -1142,7 +1242,7 @@ if not popup_mode:
                         max_pullback_pct=st.session_state.v3_max_pullback_pct,
                         retest_days=st.session_state.v3_retest_days,
                         max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-                        **_v3_params_for_model(st.session_state.breakout_model),
+                        **_scan_params_for_model(st.session_state.breakout_model),
                     )
                     _apply_watchlist([res['ticker'] for res in top_breakouts])
 
@@ -1166,7 +1266,7 @@ if not popup_mode:
                     max_pullback_pct=st.session_state.v3_max_pullback_pct,
                     retest_days=st.session_state.v3_retest_days,
                     max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-                    **_v3_params_for_model(st.session_state.breakout_model),
+                    **_scan_params_for_model(st.session_state.breakout_model),
                 )
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
             st.rerun()
@@ -1273,7 +1373,7 @@ if not popup_mode:
             max_pullback_pct=st.session_state.v3_max_pullback_pct,
             retest_days=st.session_state.v3_retest_days,
             max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-            **_v3_params_for_model(st.session_state.breakout_model),
+            **_scan_params_for_model(st.session_state.breakout_model),
         )
         _apply_watchlist([res['ticker'] for res in top_breakouts])
         st.rerun()
@@ -1366,15 +1466,19 @@ with tab_stocks:
                 elif breakout_model == "v3tv":
                     code = str(t).upper().strip().split(".")[0]
                     q = (quote_map or {}).get(code) if quote_map is not None else None
-                    if analyze_breakout_v3_quote is None:
+                    if analyze_breakout_v3_quote_setup is None:
                         analysis = None
                     else:
-                        analysis = analyze_breakout_v3_quote(
+                        analysis = analyze_breakout_v3_quote_setup(
                             t,
                             df,
                             q,
                             resolved_name=name,
                             max_runup_pct=st.session_state.v3_max_runup_pct,
+                            proximity_pct=float(st.session_state.get("v3tv_proximity_pct") or 0.5),
+                            require_daily_vol_surge=bool(st.session_state.get("v3tv_require_daily_vol_surge")),
+                            daily_vol_mult=float(st.session_state.get("v3tv_daily_vol_mult") or 1.5),
+                            min_traded_value20=float(st.session_state.get("v3tv_min_traded_value20") or 1_000_000.0),
                         )
                 elif breakout_model == "v2":
                     analysis = analyze_breakout_v2(t, df, name, benchmark_df=benchmark_df, min_rows=min(120, len(df)))
@@ -1573,7 +1677,15 @@ with tab_stocks:
                     except Exception:
                         filtered = []
                     original_rows = list(filtered)
-            if sig_filter in {"late", "failed"}:
+            if breakout_model == "v3tv" and bool(st.session_state.get("v3tv_only_near_breakout")):
+                keep_watch_all = False
+                watch_rows = []
+                try:
+                    filtered = [r for r in filtered if bool(r.get("breakout_candle_valid")) or bool(r.get("near_breakout"))]
+                except Exception:
+                    filtered = []
+                original_rows = list(filtered)
+            if breakout_model == "v3" and sig_filter in {"late", "failed"}:
                 tmp = []
                 for r in filtered:
                     is_confirmed = bool(r.get("retest_confirmed"))
@@ -1586,7 +1698,7 @@ with tab_stocks:
                         tmp.append(r)
                 filtered = tmp
 
-            if bool(st.session_state.get("v3_breakout_day_only")):
+            if breakout_model == "v3" and bool(st.session_state.get("v3_breakout_day_only")):
                 tmp = []
                 for r in filtered:
                     if not bool(r.get("breakout_candle_valid")):
@@ -1599,7 +1711,7 @@ with tab_stocks:
                     tmp.append(r)
                 filtered = tmp
 
-            if bool(st.session_state.get("v3_today_only")):
+            if breakout_model == "v3" and bool(st.session_state.get("v3_today_only")):
                 today = pd.Timestamp.now(tz="Asia/Kuala_Lumpur").date()
                 tmp = []
                 for r in filtered:
@@ -1616,7 +1728,7 @@ with tab_stocks:
                         tmp.append(r)
                 filtered = tmp
 
-            if bool(st.session_state.get("v3_age_1d")) and (not bool(st.session_state.get("v3_today_only"))):
+            if breakout_model == "v3" and bool(st.session_state.get("v3_age_1d")) and (not bool(st.session_state.get("v3_today_only"))):
                 tmp = []
                 for r in filtered:
                     if not bool(r.get("breakout_candle_valid")):
@@ -1744,7 +1856,9 @@ with tab_stocks:
             else:
                 status = "🔥 STRONG" if score_val >= strong_threshold else ("⚖️ NEUTRAL" if score_val >= neutral_threshold else "❄️ WEAK")
 
-            if r.get("watch_only") and (not bool(r.get("breakout_55"))):
+            if bool(r.get("near_breakout")) and (not bool(r.get("breakout_candle_valid"))):
+                signal_text = "🟡 NEAR"
+            elif r.get("watch_only") and (not bool(r.get("breakout_55"))):
                 signal_text = "👀 WATCH"
             else:
                 signal_text = "✅ CONFIRMED" if r.get("retest_confirmed") else ("⚡ BREAKOUT" if r.get("breakout_candle_valid") else ("❌ FAILED" if (r.get("breakout_candle") and (r.get("breakout_hold_ok") is False)) else ("⏰ LATE" if r.get("breakout_candle") else ("📈 Breakout" if r.get("breakout_55") else ""))))
@@ -1762,7 +1876,21 @@ with tab_stocks:
                 "Retest Date": r.get("retest_touch_date", ""),
                 "Run-up %": "" if r.get("runup_pct") is None else f"{float(r.get('runup_pct')):.1f}%",
                 "Status": status,
-                "Catalyst / Insight": r['catalyst'] if score_val >= neutral_threshold else r['analysis']
+                "Catalyst / Insight": (
+                    (
+                        (
+                            ("[Vol x" + ("" if r.get("daily_vol_ratio") is None else f"{float(r.get('daily_vol_ratio')):.1f}") + "] ")
+                            if breakout_model == "v3tv" and (r.get("daily_vol_ratio") is not None)
+                            else ""
+                        )
+                        + (
+                            ("[TV20 RM" + ("" if r.get("daily_traded_value20") is None else f"{float(r.get('daily_traded_value20'))/1_000_000.0:.1f}m") + "] ")
+                            if breakout_model == "v3tv" and (r.get("daily_traded_value20") is not None)
+                            else ""
+                        )
+                    )
+                    + (r['catalyst'] if score_val >= neutral_threshold else r['analysis'])
+                )
             })
         
         df_display = pd.DataFrame(display_rows)
