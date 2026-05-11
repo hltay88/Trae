@@ -623,7 +623,8 @@ if not popup_mode:
         top_n_ui = int(st.session_state.get("top_results_limit") or 20)
     except Exception:
         top_n_ui = 20
-    top_n_ui = st.sidebar.slider("Top results (watchlist size)", min_value=10, max_value=100, value=int(top_n_ui), step=10)
+    top_n_ui = st.sidebar.slider("Top N (watchlist size)", min_value=10, max_value=100, value=int(top_n_ui), step=10)
+    st.sidebar.caption("If you opened a chart popup window, the sidebar is hidden there. Use the main app tab to change Top N.")
     if int(top_n_ui) != int(st.session_state.get("top_results_limit") or 20):
         st.session_state.top_results_limit = int(top_n_ui)
         with st.spinner("Refreshing list for selected top results..."):
