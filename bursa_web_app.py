@@ -37,7 +37,7 @@ KLCI_COMPONENTS = _core.KLCI_COMPONENTS
 get_futures_breakouts = _core.get_futures_breakouts
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Bursa Breakout Analyzer", layout="wide", page_icon="📈")
+st.set_page_config(page_title="Lawrence Breakout Analyzer", layout="wide", page_icon="📈")
 
 def _get_secret_value(key: str) -> str | None:
     try:
@@ -454,7 +454,7 @@ if "v3_require_benchmark_trend" not in st.session_state:
 
 # --- UI ---
 if not chart_symbol:
-    st.title("📈 Bursa Malaysia Breakout Analyzer")
+    st.title("📈 Lawrence Breakout Analyzer")
     st.subheader("Dynamic Market Scanner & Research Tool")
     st.markdown("---")
 
