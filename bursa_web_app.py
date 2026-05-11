@@ -1425,6 +1425,29 @@ with tab_stocks:
     quote_map = None
     intraday_attempted = 0
     quote_success = 0
+    v3tv_candidates = 0
+    if breakout_model == "v3tv":
+        try:
+            desired_n = _desired_v3tv_watchlist_n()
+        except Exception:
+            desired_n = 20
+        try:
+            current_wl = _uniq_tickers(st.session_state.get("watchlist") or [])
+        except Exception:
+            current_wl = []
+        if len(current_wl) < int(desired_n):
+            try:
+                base, _ = get_stock_universe(st.session_state.universe_mode)
+            except Exception:
+                base = []
+            try:
+                manual_only = _uniq_tickers(st.session_state.get("manual_watchlist") or [])
+            except Exception:
+                manual_only = []
+            need = int(desired_n) - len(manual_only)
+            if need < 0:
+                need = 0
+            _apply_watchlist(list(base[:need]))
     if breakout_model == "v3tv":
         try:
             import bursa_core as _core
@@ -1471,6 +1494,7 @@ with tab_stocks:
     # Use a spinner for the load
     with st.spinner("Fetching latest live prices..."):
         manual_set = set(_uniq_tickers(st.session_state.get("manual_watchlist") or []))
+        v3tv_monitor = []
         for t in st.session_state.watchlist:
             # Skip futures in the stock tab if they were added manually
             if "=F" in t: continue
@@ -1495,6 +1519,12 @@ with tab_stocks:
                 elif breakout_model == "v3tv":
                     code = str(t).upper().strip().split(".")[0]
                     q = (quote_map or {}).get(code) if quote_map is not None else None
+                    live_px = None
+                    try:
+                        if isinstance(q, dict) and q.get("ld") is not None:
+                            live_px = float(q.get("ld"))
+                    except Exception:
+                        live_px = None
                     if analyze_breakout_v3_quote_setup is None:
                         analysis = None
                     else:
@@ -1509,6 +1539,97 @@ with tab_stocks:
                             daily_vol_mult=float(st.session_state.get("v3tv_daily_vol_mult") or 1.5),
                             min_traded_value20=float(st.session_state.get("v3tv_min_traded_value20") or 1_000_000.0),
                         )
+                    if analysis is None and (live_px is not None):
+                        breakout_level = None
+                        try:
+                            closes = pd.to_numeric(df["Close"], errors="coerce").dropna()
+                            if len(closes) >= 60:
+                                breakout_level = float(closes.iloc[-55:-1].max())
+                        except Exception:
+                            breakout_level = None
+                        dist_pct = None
+                        try:
+                            if breakout_level is not None and float(breakout_level) > 0.0:
+                                dist_pct = ((float(live_px) / float(breakout_level)) - 1.0) * 100.0
+                        except Exception:
+                            dist_pct = None
+                        vol_ratio = None
+                        tv20 = None
+                        daily_vol_ok = None
+                        liq_ok = None
+                        try:
+                            vols = pd.to_numeric(df["Volume"], errors="coerce") if "Volume" in df.columns else None
+                            if vols is not None:
+                                avg20_prev = vols.rolling(window=20).mean().shift(1)
+                                try:
+                                    v_last = float(vols.iloc[-1])
+                                    v_avg = float(avg20_prev.iloc[-1])
+                                    if v_avg > 0:
+                                        vol_ratio = float(v_last / v_avg)
+                                except Exception:
+                                    vol_ratio = None
+                                try:
+                                    tv20_v = (pd.to_numeric(df["Close"], errors="coerce") * vols).rolling(window=20).mean().shift(1).iloc[-1]
+                                    if tv20_v == tv20_v:
+                                        tv20 = float(tv20_v)
+                                except Exception:
+                                    tv20 = None
+                        except Exception:
+                            vol_ratio = None
+                            tv20 = None
+                        try:
+                            mult = float(st.session_state.get("v3tv_daily_vol_mult") or 1.5)
+                        except Exception:
+                            mult = 1.5
+                        try:
+                            min_tv = float(st.session_state.get("v3tv_min_traded_value20") or 1_000_000.0)
+                        except Exception:
+                            min_tv = 1_000_000.0
+                        if vol_ratio is not None:
+                            daily_vol_ok = bool(float(vol_ratio) >= float(mult))
+                        if tv20 is not None:
+                            liq_ok = bool(float(tv20) >= float(min_tv))
+                        try:
+                            _, resolved_name, sector, insight, catalyst = _core._resolve_insight_v3(str(t), name)
+                        except Exception:
+                            resolved_name = name or str(t)
+                            sector = ""
+                            insight = ""
+                            catalyst = ""
+                        v3tv_monitor.append({
+                            "ticker": str(t),
+                            "name": str(resolved_name or str(t)),
+                            "sector": str(sector or ""),
+                            "price": float(live_px),
+                            "rsi": 50.0,
+                            "score": 0,
+                            "score_max": 7,
+                            "breakout_55": False,
+                            "breakout_candle": False,
+                            "breakout_candle_valid": False,
+                            "breakout_hold_ok": None,
+                            "runup_pct": dist_pct,
+                            "max_runup_pct": st.session_state.v3_max_runup_pct,
+                            "max_pullback_pct": st.session_state.v3_max_pullback_pct,
+                            "retest_days": st.session_state.v3_retest_days,
+                            "retest_confirmed": False,
+                            "breakout_candle_date": "",
+                            "breakout_candle_age": None,
+                            "breakout_level": breakout_level,
+                            "power_candle": None,
+                            "volume_spike": None,
+                            "liquidity_ok": True if liq_ok is None else bool(liq_ok),
+                            "analysis": str(insight or ""),
+                            "catalyst": str(catalyst or ""),
+                            "near_breakout": False,
+                            "distance_to_breakout_pct": dist_pct,
+                            "proximity_pct": float(st.session_state.get("v3tv_proximity_pct") or 0.5),
+                            "daily_vol_ratio": vol_ratio,
+                            "daily_traded_value20": tv20,
+                            "daily_vol_ok": daily_vol_ok,
+                            "monitor_row": True,
+                            "model": "v3tv",
+                        })
                 elif breakout_model == "v2":
                     analysis = analyze_breakout_v2(t, df, name, benchmark_df=benchmark_df, min_rows=min(120, len(df)))
                 else:
@@ -1676,6 +1797,21 @@ with tab_stocks:
                     "model": "v3tv" if breakout_model == "v3tv" else "v3",
                 })
 
+        if breakout_model == "v3tv" and (not data_rows) and v3tv_monitor:
+            try:
+                v3tv_monitor.sort(key=lambda r: abs(float(r.get("distance_to_breakout_pct") or 0.0)))
+            except Exception:
+                pass
+            try:
+                keep_n = _desired_v3tv_watchlist_n()
+            except Exception:
+                keep_n = 20
+            data_rows = list(v3tv_monitor[:keep_n])
+            v3tv_candidates = len(v3tv_monitor)
+            st.warning("No ⚡ BREAKOUT / 🟡 NEAR found. Showing the closest candidates to the breakout level.")
+        elif breakout_model == "v3tv":
+            v3tv_candidates = len(v3tv_monitor)
+
     if data_rows:
         if breakout_model in {"v3", "v3tv"} and st.session_state.get("v3_filter_note"):
             st.info(str(st.session_state.get("v3_filter_note")))
@@ -1710,7 +1846,7 @@ with tab_stocks:
                 keep_watch_all = False
                 watch_rows = []
                 try:
-                    filtered = [r for r in filtered if bool(r.get("breakout_candle_valid")) or bool(r.get("near_breakout"))]
+                    filtered = [r for r in filtered if bool(r.get("breakout_candle_valid")) or bool(r.get("near_breakout")) or bool(r.get("monitor_row"))]
                 except Exception:
                     filtered = []
                 original_rows = list(filtered)
@@ -1849,6 +1985,8 @@ with tab_stocks:
         col1.metric(metric_label, total_breakouts)
         col2.metric("Watchlist Count", len(data_rows))
         col3.metric("Avg Watchlist RSI", f"{avg_rsi:.1f}")
+        if breakout_model == "v3tv" and v3tv_candidates:
+            st.caption(f"V3tv candidates evaluated: {v3tv_candidates}")
 
         st.markdown("### 📊 Live Breakout Analysis")
         
@@ -1868,7 +2006,9 @@ with tab_stocks:
             score_max = int(r.get("score_max", 5))
             score_val = int(r.get("score", 0))
 
-            if r.get("watch_only"):
+            if bool(r.get("monitor_row")):
+                status = "👀 WATCH"
+            elif r.get("watch_only"):
                 if breakout_model == "v3tv":
                     status = "🔥 STRONG" if score_val >= 8 else ("⚖️ NEUTRAL" if score_val >= 5 else "❄️ WEAK")
                 else:
@@ -1885,7 +2025,9 @@ with tab_stocks:
             else:
                 status = "🔥 STRONG" if score_val >= strong_threshold else ("⚖️ NEUTRAL" if score_val >= neutral_threshold else "❄️ WEAK")
 
-            if bool(r.get("near_breakout")) and (not bool(r.get("breakout_candle_valid"))):
+            if bool(r.get("monitor_row")) and (not bool(r.get("near_breakout"))) and (not bool(r.get("breakout_candle_valid"))):
+                signal_text = "🟤 FAR"
+            elif bool(r.get("near_breakout")) and (not bool(r.get("breakout_candle_valid"))):
                 signal_text = "🟡 NEAR"
             elif r.get("watch_only") and (not bool(r.get("breakout_55"))):
                 signal_text = "👀 WATCH"
