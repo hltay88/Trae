@@ -1555,8 +1555,14 @@ with tab_stocks:
 
             if r.get("watch_only") and (not bool(r.get("breakout_55"))):
                 signal_text = "👀 WATCH"
+            elif (not bool(r.get("breakout_candle_valid"))) and (not bool(r.get("retest_confirmed"))) and bool(r.get("near_breakout")):
+                signal_text = "🟡 NEAR"
             else:
                 signal_text = "✅ CONFIRMED" if r.get("retest_confirmed") else ("⚡ BREAKOUT" if r.get("breakout_candle_valid") else ("❌ FAILED" if (r.get("breakout_candle") and (r.get("breakout_hold_ok") is False)) else ("⏰ LATE" if r.get("breakout_candle") else ("📈 Breakout" if r.get("breakout_55") else ""))))
+
+            runup_or_dist = r.get("runup_pct")
+            if runup_or_dist is None and r.get("distance_to_breakout_pct") is not None:
+                runup_or_dist = r.get("distance_to_breakout_pct")
 
             display_rows.append({
                 "Ticker": r['ticker'],
@@ -1569,7 +1575,7 @@ with tab_stocks:
                 "Signal Date": r.get("breakout_candle_date", ""),
                 "Retest": "✅" if r.get("retest_confirmed") else ("⏳" if (int(r.get("retest_days") or 0) > 0 and r.get("breakout_candle_valid")) else ""),
                 "Retest Date": r.get("retest_touch_date", ""),
-                "Run-up %": "" if r.get("runup_pct") is None else f"{float(r.get('runup_pct')):.1f}%",
+                "Run-up %": "" if runup_or_dist is None else f"{float(runup_or_dist):.1f}%",
                 "Status": status,
                 "Catalyst / Insight": (r['catalyst'] if score_val >= neutral_threshold else r['analysis'])
             })

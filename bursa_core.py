@@ -1846,6 +1846,26 @@ def analyze_breakout_v3(
         except Exception:
             retest_touch_date = None
 
+    breakout_level = None
+    distance_to_breakout_pct = None
+    near_breakout = False
+    try:
+        if len(df) >= breakout_lookback + 5:
+            prior_high = float(df["Close"].iloc[-breakout_lookback:-1].max())
+            thr = float(prior_high)
+            if float(buf_pct) > 0.0:
+                thr = float(prior_high) * (1.0 + (float(buf_pct) / 100.0))
+            if thr > 0.0:
+                breakout_level = float(thr)
+                distance_to_breakout_pct = ((float(current_close) / float(breakout_level)) - 1.0) * 100.0
+                if (not bool(breakout_candle_valid)) and (not bool(retest_confirmed)) and (not bool(breakout_55)):
+                    if float(distance_to_breakout_pct) < 0.0 and float(distance_to_breakout_pct) >= -1.0:
+                        near_breakout = True
+    except Exception:
+        breakout_level = None
+        distance_to_breakout_pct = None
+        near_breakout = False
+
     return {
         "ticker": ticker,
         "code": code,
@@ -1879,6 +1899,9 @@ def analyze_breakout_v3(
         "retest_confirmed": bool(retest_confirmed),
         "retest_touch_date": retest_touch_date,
         "retest_vol_ok": None if retest_vol_ok is None else bool(retest_vol_ok),
+        "breakout_level": None if breakout_level is None else float(breakout_level),
+        "distance_to_breakout_pct": None if distance_to_breakout_pct is None else float(distance_to_breakout_pct),
+        "near_breakout": bool(near_breakout),
         "model": "v3",
     }
 
