@@ -420,7 +420,7 @@ _require_login(bool(popup_mode))
 if "breakout_model" not in st.session_state:
     st.session_state.breakout_model = "v3"
 if "universe_mode" not in st.session_state:
-    st.session_state.universe_mode = "focus"
+    st.session_state.universe_mode = "fbm100"
 if "sector_focus" not in st.session_state:
     st.session_state.sector_focus = []
 if "v3_signal_lookback" not in st.session_state:
@@ -434,7 +434,7 @@ if "v3_retest_days" not in st.session_state:
 if "max_tickers_scan" not in st.session_state:
     st.session_state.max_tickers_scan = 300
 if "top_results_limit" not in st.session_state:
-    st.session_state.top_results_limit = 20
+    st.session_state.top_results_limit = 50
 if "v3_breakout_buffer_pct" not in st.session_state:
     st.session_state.v3_breakout_buffer_pct = 0.0
 if "v3_volume_spike_mult" not in st.session_state:
@@ -702,78 +702,8 @@ if not popup_mode:
                 _apply_watchlist(list(universe_list[:top_n]))
         st.rerun()
 
-    if st.session_state.universe_mode in {"klci", "fbm70", "fbm100", "smallcap"} or str(st.session_state.universe_mode).startswith("sector-"):
-        if "klci_auto_update" not in st.session_state:
-            st.session_state.klci_auto_update = True
-        if "index_force_refresh" not in st.session_state:
-            st.session_state.index_force_refresh = False
-        try:
-            import bursa_core as _core
-            st.session_state.klci_auto_update = st.sidebar.checkbox("Auto-update index constituents", value=bool(st.session_state.klci_auto_update))
-            if not bool(st.session_state.klci_auto_update) and bool(st.session_state.index_force_refresh):
-                st.session_state.index_force_refresh = False
-            st.session_state.index_force_refresh = st.sidebar.checkbox(
-                "Force refresh index list (no cache)",
-                value=bool(st.session_state.index_force_refresh),
-                disabled=not bool(st.session_state.klci_auto_update),
-                help="Bypasses cached index constituents and fetches from the source each run (slower). If the source is blocked, the app falls back to the last cached list.",
-            )
-            _core.KLCI_AUTO_UPDATE_ENABLED = bool(st.session_state.klci_auto_update)
-            _core.INDEX_AUTO_UPDATE_ENABLED = bool(st.session_state.klci_auto_update)
-            _core.INDEX_FORCE_REFRESH = bool(st.session_state.index_force_refresh)
-
-            if st.session_state.universe_mode == "klci":
-                info = _core.get_klci_components_info(max_age_days=30)
-                src = str(info.get("source") or "")
-                updated_at = info.get("updated_at")
-                if updated_at:
-                    st.sidebar.caption(f"KLCI list: {src}, updated {updated_at}")
-                else:
-                    st.sidebar.caption(f"KLCI list: {src}")
-                update_label = "Update KLCI Now"
-            elif st.session_state.universe_mode in {"fbm70", "fbm100", "smallcap"}:
-                update_label = "Update Index Now"
-                info = _core.get_index_components_info(st.session_state.universe_mode, max_age_days=30)
-                src = str(info.get("source") or "")
-                updated_at = info.get("updated_at")
-                if updated_at:
-                    st.sidebar.caption(f"Index list: {src}, updated {updated_at}")
-                else:
-                    st.sidebar.caption(f"Index list: {src}")
-            else:
-                update_label = "Update Large/Mid Lists Now"
-                info_klci = _core.get_klci_components_info(max_age_days=30)
-                info_70 = _core.get_index_components_info("fbm70", max_age_days=30)
-                info_100 = _core.get_index_components_info("fbm100", max_age_days=30)
-                st.sidebar.caption(f"KLCI: {info_klci.get('source')}, {info_klci.get('updated_at') or 'n/a'}")
-                st.sidebar.caption(f"FBM70: {info_70.get('source')}, {info_70.get('updated_at') or 'n/a'}")
-                st.sidebar.caption(f"FBM100: {info_100.get('source')}, {info_100.get('updated_at') or 'n/a'}")
-
-            if st.sidebar.button(update_label, use_container_width=True):
-                with st.spinner("Updating constituents..."):
-                    if st.session_state.universe_mode == "klci":
-                        _core.refresh_klci_components(force=True, max_age_days=30)
-                    elif st.session_state.universe_mode in {"fbm70", "fbm100", "smallcap"}:
-                        _core.refresh_index_components(st.session_state.universe_mode, force=True, max_age_days=30)
-                    else:
-                        _core.refresh_klci_components(force=True, max_age_days=30)
-                        _core.refresh_index_components("fbm70", force=True, max_age_days=30)
-                        _core.refresh_index_components("fbm100", force=True, max_age_days=30)
-                    top_breakouts = get_top_breakouts(
-                        limit=top_n,
-                        model=st.session_state.breakout_model,
-                        universe_mode=st.session_state.universe_mode,
-                        sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3"} else None,
-                        signal_lookback=st.session_state.v3_signal_lookback,
-                        max_runup_pct=st.session_state.v3_max_runup_pct,
-                        max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                        retest_days=st.session_state.v3_retest_days,
-                        **_scan_params_for_model(st.session_state.breakout_model),
-                    )
-                    _apply_watchlist([res['ticker'] for res in top_breakouts])
-                st.rerun()
-        except Exception:
-            pass
+    # Index constituent lists (KLCI/FBM70/FBM100/etc.) auto-refresh in the background.
+    # Manual update/force-refresh controls are intentionally hidden to keep the UI simple.
 
     if st.session_state.universe_mode == "auto":
         st.sidebar.caption("Auto universe downloads & caches a Malaysia stock list; the first run may take longer.")
@@ -840,7 +770,7 @@ if not popup_mode:
         if "v3_show_watchlist_all" not in st.session_state:
             st.session_state.v3_show_watchlist_all = True
         if "v3_signals_only" not in st.session_state:
-            st.session_state.v3_signals_only = True
+            st.session_state.v3_signals_only = False
 
         entry_options = [
             "Early Entry (Recommended)",
@@ -1167,33 +1097,6 @@ if not popup_mode:
                 _apply_watchlist(list(fallback_universe[:top_n]))
             _notify("success", "Dashboard updated!")
             st.rerun()
-
-    st.sidebar.markdown("---")
-    st.sidebar.header("📡 Data")
-    if "price_data_mode" not in st.session_state:
-        st.session_state.price_data_mode = "fast"
-    if "tv_price_overlay" not in st.session_state:
-        st.session_state.tv_price_overlay = False
-    try:
-        import bursa_core as _core
-        mode_label = st.sidebar.selectbox(
-            "Price Data",
-            ["Fast (cache 15 min)", "Latest (no cache)", "Offline (cache only)"],
-            index=0 if st.session_state.price_data_mode == "fast" else (1 if st.session_state.price_data_mode == "latest" else 2),
-            help="Fast reduces rate limits by caching recent OHLCV; Latest always re-fetches; Offline uses last cached candles.",
-        )
-        st.session_state.price_data_mode = "fast" if mode_label.startswith("Fast") else ("latest" if mode_label.startswith("Latest") else "offline")
-        _core.PRICE_CACHE_MODE = st.session_state.price_data_mode
-        _core.PRICE_CACHE_MAX_AGE_SECONDS = 15 * 60
-
-        st.session_state.tv_price_overlay = st.sidebar.checkbox(
-            "Overlay TradingView last price",
-            value=bool(st.session_state.tv_price_overlay),
-            help="Replaces the latest Close with TradingView last price (MYX-####). Uses a short cache to reduce requests.",
-        )
-        _core.TRADINGVIEW_PRICE_OVERLAY_ENABLED = bool(st.session_state.tv_price_overlay)
-    except Exception:
-        pass
 
     st.sidebar.markdown("---")
     st.sidebar.header("➕ Add Custom Stock")
