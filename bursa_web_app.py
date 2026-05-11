@@ -1019,7 +1019,7 @@ if not popup_mode:
             st.session_state.v3_signals_only = st.sidebar.toggle(
                 "Show only valid V3 signals",
                 value=bool(st.session_state.v3_signals_only),
-                help="If enabled, shows only V3 signals where ⚡ BREAKOUT (or retest-confirmed) is true.",
+                help="If enabled, shows only V3 signals where ⚡ BREAKOUT (or retest-confirmed) is true. This will hide 🟡 NEAR hints.",
             )
             st.session_state.v3_show_watchlist_all = False
         else:
@@ -1040,19 +1040,19 @@ if not popup_mode:
         st.session_state.v3_breakout_day_only = st.sidebar.toggle(
             "Breakout-day entry only",
             value=bool(st.session_state.v3_breakout_day_only),
-            help="Shows only ⚡ BREAKOUT signals with run-up within the current V3 Max Run-up setting.",
+            help="Shows only ⚡ BREAKOUT signals with run-up within the current V3 Max Run-up setting. This will hide 🟡 NEAR hints.",
         )
 
         st.session_state.v3_today_only = st.sidebar.toggle(
             "Today breakout only",
             value=bool(st.session_state.v3_today_only),
-            help="Shows only ⚡ BREAKOUT signals where the breakout candle happened today (MYT).",
+            help="Shows only ⚡ BREAKOUT signals where the breakout candle happened today (MYT). This will hide 🟡 NEAR hints.",
         )
 
         st.session_state.v3_age_1d = st.sidebar.toggle(
             "Breakout within 1 trading day",
             value=bool(st.session_state.v3_age_1d),
-            help="Shows ⚡ BREAKOUT signals whose breakout candle is today or yesterday (more practical with free daily data).",
+            help="Shows ⚡ BREAKOUT signals whose breakout candle is today or yesterday (more practical with free daily data). This will hide 🟡 NEAR hints.",
         )
 
         with st.sidebar.expander("Advanced V3 Filters", expanded=False):
