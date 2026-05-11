@@ -616,6 +616,22 @@ def _scan_params_for_model(model_key: str) -> dict:
         pass
     return out
 
+def _desired_v3tv_watchlist_n() -> int:
+    try:
+        n = int(st.session_state.get("intraday_max_tickers") or st.session_state.get("top_results_limit") or 20)
+    except Exception:
+        n = 20
+    if n < 10:
+        n = 10
+    if n > 200:
+        n = 200
+    return n
+
+def _refresh_v3tv_watchlist_from_universe() -> None:
+    base, _ = get_stock_universe(st.session_state.universe_mode)
+    n = _desired_v3tv_watchlist_n()
+    _apply_watchlist(list(base[:n]))
+
 
 # Initialize session state for watchlist
 if 'watchlist' not in st.session_state:
@@ -628,23 +644,26 @@ if 'watchlist' not in st.session_state:
             top_n = 10
         if top_n > 200:
             top_n = 200
-        top_breakouts = get_top_breakouts(
-            limit=top_n,
-            model=st.session_state.breakout_model,
-            universe_mode=st.session_state.universe_mode,
-            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
-            signal_lookback=st.session_state.v3_signal_lookback,
-            max_runup_pct=st.session_state.v3_max_runup_pct,
-            max_pullback_pct=st.session_state.v3_max_pullback_pct,
-            retest_days=st.session_state.v3_retest_days,
-            max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-            **_scan_params_for_model(st.session_state.breakout_model),
-        )
-        if top_breakouts:
-            _apply_watchlist([res['ticker'] for res in top_breakouts])
+        if st.session_state.breakout_model == "v3tv":
+            _refresh_v3tv_watchlist_from_universe()
         else:
-            fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
-            _apply_watchlist(list(fallback_universe[:top_n]))
+            top_breakouts = get_top_breakouts(
+                limit=top_n,
+                model=st.session_state.breakout_model,
+                universe_mode=st.session_state.universe_mode,
+                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
+                signal_lookback=st.session_state.v3_signal_lookback,
+                max_runup_pct=st.session_state.v3_max_runup_pct,
+                max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                retest_days=st.session_state.v3_retest_days,
+                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
+                **_scan_params_for_model(st.session_state.breakout_model),
+            )
+            if top_breakouts:
+                _apply_watchlist([res['ticker'] for res in top_breakouts])
+            else:
+                fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
+                _apply_watchlist(list(fallback_universe[:top_n]))
 
 # Sidebar for adding stocks (hide in popup mode)
 if not popup_mode:
@@ -670,23 +689,26 @@ if not popup_mode:
     if int(top_n_ui) != int(st.session_state.get("top_results_limit") or 20):
         st.session_state.top_results_limit = int(top_n_ui)
         with st.spinner("Refreshing list for selected top results..."):
-            top_breakouts = get_top_breakouts(
-                limit=int(st.session_state.top_results_limit),
-                model=st.session_state.breakout_model,
-                universe_mode=st.session_state.universe_mode,
-                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
-                signal_lookback=st.session_state.v3_signal_lookback,
-                max_runup_pct=st.session_state.v3_max_runup_pct,
-                max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                retest_days=st.session_state.v3_retest_days,
-                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-                **_scan_params_for_model(st.session_state.breakout_model),
-            )
-            if top_breakouts:
-                _apply_watchlist([res['ticker'] for res in top_breakouts])
+            if st.session_state.breakout_model == "v3tv":
+                _refresh_v3tv_watchlist_from_universe()
             else:
-                fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
-                _apply_watchlist(list(fallback_universe[: int(st.session_state.top_results_limit)]))
+                top_breakouts = get_top_breakouts(
+                    limit=int(st.session_state.top_results_limit),
+                    model=st.session_state.breakout_model,
+                    universe_mode=st.session_state.universe_mode,
+                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
+                    signal_lookback=st.session_state.v3_signal_lookback,
+                    max_runup_pct=st.session_state.v3_max_runup_pct,
+                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                    retest_days=st.session_state.v3_retest_days,
+                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
+                    **_scan_params_for_model(st.session_state.breakout_model),
+                )
+                if top_breakouts:
+                    _apply_watchlist([res['ticker'] for res in top_breakouts])
+                else:
+                    fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
+                    _apply_watchlist(list(fallback_universe[: int(st.session_state.top_results_limit)]))
         st.rerun()
 
     try:
@@ -726,22 +748,25 @@ if not popup_mode:
     if selected_universe != st.session_state.universe_mode:
         st.session_state.universe_mode = selected_universe
         with st.spinner("Refreshing list for selected universe..."):
-            top_breakouts = get_top_breakouts(
-                limit=top_n,
-                model=st.session_state.breakout_model,
-                universe_mode=st.session_state.universe_mode,
-                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
-                signal_lookback=st.session_state.v3_signal_lookback,
-                max_runup_pct=st.session_state.v3_max_runup_pct,
-                max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                retest_days=st.session_state.v3_retest_days,
-                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-                **_scan_params_for_model(st.session_state.breakout_model),
-            )
-            if top_breakouts:
-                _apply_watchlist([res['ticker'] for res in top_breakouts])
+            if st.session_state.breakout_model == "v3tv":
+                _refresh_v3tv_watchlist_from_universe()
             else:
-                _apply_watchlist(list(universe_list[:top_n]))
+                top_breakouts = get_top_breakouts(
+                    limit=top_n,
+                    model=st.session_state.breakout_model,
+                    universe_mode=st.session_state.universe_mode,
+                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
+                    signal_lookback=st.session_state.v3_signal_lookback,
+                    max_runup_pct=st.session_state.v3_max_runup_pct,
+                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                    retest_days=st.session_state.v3_retest_days,
+                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
+                    **_scan_params_for_model(st.session_state.breakout_model),
+                )
+                if top_breakouts:
+                    _apply_watchlist([res['ticker'] for res in top_breakouts])
+                else:
+                    _apply_watchlist(list(universe_list[:top_n]))
         st.rerun()
 
     if st.session_state.universe_mode in {"klci", "fbm70", "fbm100", "smallcap"} or str(st.session_state.universe_mode).startswith("sector-"):
@@ -801,18 +826,21 @@ if not popup_mode:
                         _core.refresh_klci_components(force=True, max_age_days=30)
                         _core.refresh_index_components("fbm70", force=True, max_age_days=30)
                         _core.refresh_index_components("fbm100", force=True, max_age_days=30)
-                    top_breakouts = get_top_breakouts(
-                        limit=top_n,
-                        model=st.session_state.breakout_model,
-                        universe_mode=st.session_state.universe_mode,
-                        sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
-                        signal_lookback=st.session_state.v3_signal_lookback,
-                        max_runup_pct=st.session_state.v3_max_runup_pct,
-                        max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                        retest_days=st.session_state.v3_retest_days,
-                        **_scan_params_for_model(st.session_state.breakout_model),
-                    )
-                    _apply_watchlist([res['ticker'] for res in top_breakouts])
+                    if st.session_state.breakout_model == "v3tv":
+                        _refresh_v3tv_watchlist_from_universe()
+                    else:
+                        top_breakouts = get_top_breakouts(
+                            limit=top_n,
+                            model=st.session_state.breakout_model,
+                            universe_mode=st.session_state.universe_mode,
+                            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
+                            signal_lookback=st.session_state.v3_signal_lookback,
+                            max_runup_pct=st.session_state.v3_max_runup_pct,
+                            max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                            retest_days=st.session_state.v3_retest_days,
+                            **_scan_params_for_model(st.session_state.breakout_model),
+                        )
+                        _apply_watchlist([res['ticker'] for res in top_breakouts])
                 st.rerun()
         except Exception:
             pass
@@ -823,23 +851,26 @@ if not popup_mode:
         if int(max_scan) != int(st.session_state.max_tickers_scan):
             st.session_state.max_tickers_scan = int(max_scan)
             with st.spinner("Refreshing list for scan size..."):
-                top_breakouts = get_top_breakouts(
-                    limit=top_n,
-                    model=st.session_state.breakout_model,
-                    universe_mode=st.session_state.universe_mode,
-                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
-                    signal_lookback=st.session_state.v3_signal_lookback,
-                    max_runup_pct=st.session_state.v3_max_runup_pct,
-                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                    retest_days=st.session_state.v3_retest_days,
-                    max_tickers=st.session_state.max_tickers_scan,
-                    **_scan_params_for_model(st.session_state.breakout_model),
-                )
-                if top_breakouts:
-                    _apply_watchlist([res['ticker'] for res in top_breakouts])
+                if st.session_state.breakout_model == "v3tv":
+                    _refresh_v3tv_watchlist_from_universe()
                 else:
-                    fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
-                    _apply_watchlist(list(fallback_universe[:top_n]))
+                    top_breakouts = get_top_breakouts(
+                        limit=top_n,
+                        model=st.session_state.breakout_model,
+                        universe_mode=st.session_state.universe_mode,
+                        sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
+                        signal_lookback=st.session_state.v3_signal_lookback,
+                        max_runup_pct=st.session_state.v3_max_runup_pct,
+                        max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                        retest_days=st.session_state.v3_retest_days,
+                        max_tickers=st.session_state.max_tickers_scan,
+                        **_scan_params_for_model(st.session_state.breakout_model),
+                    )
+                    if top_breakouts:
+                        _apply_watchlist([res['ticker'] for res in top_breakouts])
+                    else:
+                        fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
+                        _apply_watchlist(list(fallback_universe[:top_n]))
             st.rerun()
     if st.session_state.universe_mode == "file":
         st.sidebar.caption("Universe source: bursa_universe.csv in the app folder. Put one 4-digit stock code per line (Main + ACE). Example: 6742 or 6742.KL.")
@@ -871,23 +902,26 @@ if not popup_mode:
     if selected_model != st.session_state.breakout_model:
         st.session_state.breakout_model = selected_model
         with st.spinner("Refreshing list for selected model..."):
-            top_breakouts = get_top_breakouts(
-                limit=top_n,
-                model=st.session_state.breakout_model,
-                universe_mode=st.session_state.universe_mode,
-                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
-                signal_lookback=st.session_state.v3_signal_lookback,
-                max_runup_pct=st.session_state.v3_max_runup_pct,
-                max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                retest_days=st.session_state.v3_retest_days,
-                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-                **_scan_params_for_model(st.session_state.breakout_model),
-            )
-            if top_breakouts:
-                _apply_watchlist([res['ticker'] for res in top_breakouts])
+            if st.session_state.breakout_model == "v3tv":
+                _refresh_v3tv_watchlist_from_universe()
             else:
-                fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
-                _apply_watchlist(list(fallback_universe[:top_n]))
+                top_breakouts = get_top_breakouts(
+                    limit=top_n,
+                    model=st.session_state.breakout_model,
+                    universe_mode=st.session_state.universe_mode,
+                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
+                    signal_lookback=st.session_state.v3_signal_lookback,
+                    max_runup_pct=st.session_state.v3_max_runup_pct,
+                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                    retest_days=st.session_state.v3_retest_days,
+                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
+                    **_scan_params_for_model(st.session_state.breakout_model),
+                )
+                if top_breakouts:
+                    _apply_watchlist([res['ticker'] for res in top_breakouts])
+                else:
+                    fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
+                    _apply_watchlist(list(fallback_universe[:top_n]))
         st.rerun()
 
     if st.session_state.breakout_model == "v3tv":
@@ -1215,19 +1249,22 @@ if not popup_mode:
             if new_adv != prev_adv:
                 st.session_state.v3_entry_style = "Custom"
                 with st.spinner("Refreshing list..."):
-                    top_breakouts = get_top_breakouts(
-                        limit=top_n,
-                        model=st.session_state.breakout_model,
-                        universe_mode=st.session_state.universe_mode,
-                        sector_allowlist=st.session_state.sector_focus or None,
-                        signal_lookback=st.session_state.v3_signal_lookback,
-                        max_runup_pct=st.session_state.v3_max_runup_pct,
-                        max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                        retest_days=st.session_state.v3_retest_days,
-                        max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-                        **_scan_params_for_model(st.session_state.breakout_model),
-                    )
-                    _apply_watchlist([res['ticker'] for res in top_breakouts])
+                    if st.session_state.breakout_model == "v3tv":
+                        _refresh_v3tv_watchlist_from_universe()
+                    else:
+                        top_breakouts = get_top_breakouts(
+                            limit=top_n,
+                            model=st.session_state.breakout_model,
+                            universe_mode=st.session_state.universe_mode,
+                            sector_allowlist=st.session_state.sector_focus or None,
+                            signal_lookback=st.session_state.v3_signal_lookback,
+                            max_runup_pct=st.session_state.v3_max_runup_pct,
+                            max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                            retest_days=st.session_state.v3_retest_days,
+                            max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
+                            **_scan_params_for_model(st.session_state.breakout_model),
+                        )
+                        _apply_watchlist([res['ticker'] for res in top_breakouts])
 
     sectors = sorted({str(v.get("sector")).strip() for v in MARKET_INSIGHTS.values() if str(v.get("sector") or "").strip()})
     if sectors:
@@ -1239,6 +1276,29 @@ if not popup_mode:
         if selected_sectors != st.session_state.sector_focus:
             st.session_state.sector_focus = selected_sectors
             with st.spinner("Refreshing list for selected sector focus..."):
+                if st.session_state.breakout_model == "v3tv":
+                    _refresh_v3tv_watchlist_from_universe()
+                else:
+                    top_breakouts = get_top_breakouts(
+                        limit=top_n,
+                        model=st.session_state.breakout_model,
+                        universe_mode=st.session_state.universe_mode,
+                        sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
+                        signal_lookback=st.session_state.v3_signal_lookback,
+                        max_runup_pct=st.session_state.v3_max_runup_pct,
+                        max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                        retest_days=st.session_state.v3_retest_days,
+                        max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
+                        **_scan_params_for_model(st.session_state.breakout_model),
+                    )
+                    _apply_watchlist([res['ticker'] for res in top_breakouts])
+            st.rerun()
+
+    if st.sidebar.button("🔄 Refresh Market Discovery", use_container_width=True):
+        with st.spinner("Refreshing Market Discovery..."):
+            if st.session_state.breakout_model == "v3tv":
+                _refresh_v3tv_watchlist_from_universe()
+            else:
                 top_breakouts = get_top_breakouts(
                     limit=top_n,
                     model=st.session_state.breakout_model,
@@ -1248,32 +1308,15 @@ if not popup_mode:
                     max_runup_pct=st.session_state.v3_max_runup_pct,
                     max_pullback_pct=st.session_state.v3_max_pullback_pct,
                     retest_days=st.session_state.v3_retest_days,
-                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
+                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
                     **_scan_params_for_model(st.session_state.breakout_model),
                 )
-                _apply_watchlist([res['ticker'] for res in top_breakouts])
-            st.rerun()
-
-    if st.sidebar.button("🔄 Refresh Market Discovery", use_container_width=True):
-        with st.spinner("Re-scanning KLCI components..."):
-            top_breakouts = get_top_breakouts(
-                limit=top_n,
-                model=st.session_state.breakout_model,
-                universe_mode=st.session_state.universe_mode,
-                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
-                signal_lookback=st.session_state.v3_signal_lookback,
-                max_runup_pct=st.session_state.v3_max_runup_pct,
-                max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                retest_days=st.session_state.v3_retest_days,
-                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-                **_v3_params_for_model(st.session_state.breakout_model),
-            )
-            if top_breakouts:
-                _apply_watchlist([res['ticker'] for res in top_breakouts])
-            else:
-                fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
-                _apply_watchlist(list(fallback_universe[:top_n]))
-            st.success("Dashboard updated!")
+                if top_breakouts:
+                    _apply_watchlist([res['ticker'] for res in top_breakouts])
+                else:
+                    fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
+                    _apply_watchlist(list(fallback_universe[:top_n]))
+            _notify("success", "Dashboard updated!")
             st.rerun()
 
     st.sidebar.markdown("---")
@@ -1346,19 +1389,22 @@ if not popup_mode:
         st.rerun()
 
     if st.sidebar.button(f"🗑️ Reset to Top {top_n}", use_container_width=True):
-        top_breakouts = get_top_breakouts(
-            limit=top_n,
-            model=st.session_state.breakout_model,
-            universe_mode=st.session_state.universe_mode,
-            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
-            signal_lookback=st.session_state.v3_signal_lookback,
-            max_runup_pct=st.session_state.v3_max_runup_pct,
-            max_pullback_pct=st.session_state.v3_max_pullback_pct,
-            retest_days=st.session_state.v3_retest_days,
-            max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else (st.session_state.get("intraday_max_tickers") if st.session_state.breakout_model == "v3tv" else None)),
-            **_scan_params_for_model(st.session_state.breakout_model),
-        )
-        _apply_watchlist([res['ticker'] for res in top_breakouts])
+        if st.session_state.breakout_model == "v3tv":
+            _refresh_v3tv_watchlist_from_universe()
+        else:
+            top_breakouts = get_top_breakouts(
+                limit=top_n,
+                model=st.session_state.breakout_model,
+                universe_mode=st.session_state.universe_mode,
+                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3", "v3tv"} else None,
+                signal_lookback=st.session_state.v3_signal_lookback,
+                max_runup_pct=st.session_state.v3_max_runup_pct,
+                max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                retest_days=st.session_state.v3_retest_days,
+                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
+                **_scan_params_for_model(st.session_state.breakout_model),
+            )
+            _apply_watchlist([res['ticker'] for res in top_breakouts])
         st.rerun()
 
 # --- MAIN DASHBOARD TABS ---
