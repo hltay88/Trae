@@ -434,7 +434,7 @@ if "v3_retest_days" not in st.session_state:
 if "max_tickers_scan" not in st.session_state:
     st.session_state.max_tickers_scan = 300
 if "top_results_limit" not in st.session_state:
-    st.session_state.top_results_limit = 50
+    st.session_state.top_results_limit = 20
 if "v3_breakout_buffer_pct" not in st.session_state:
     st.session_state.v3_breakout_buffer_pct = 0.0
 if "v3_volume_spike_mult" not in st.session_state:
