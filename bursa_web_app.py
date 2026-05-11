@@ -1098,6 +1098,36 @@ if not popup_mode:
             _notify("success", "Dashboard updated!")
             st.rerun()
 
+    if st.sidebar.button("⚡ Fetch Latest Now (no cache)", use_container_width=True):
+        with st.spinner("Fetching latest candles (no cache)..."):
+            prev_mode = getattr(_core, "PRICE_CACHE_MODE", "fast")
+            prev_age = getattr(_core, "PRICE_CACHE_MAX_AGE_SECONDS", 0)
+            try:
+                _core.PRICE_CACHE_MODE = "latest"
+                _core.PRICE_CACHE_MAX_AGE_SECONDS = 0
+                top_breakouts = get_top_breakouts(
+                    limit=top_n,
+                    model=st.session_state.breakout_model,
+                    universe_mode=st.session_state.universe_mode,
+                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3"} else None,
+                    signal_lookback=st.session_state.v3_signal_lookback,
+                    max_runup_pct=st.session_state.v3_max_runup_pct,
+                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                    retest_days=st.session_state.v3_retest_days,
+                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
+                    **_scan_params_for_model(st.session_state.breakout_model),
+                )
+            finally:
+                _core.PRICE_CACHE_MODE = prev_mode
+                _core.PRICE_CACHE_MAX_AGE_SECONDS = prev_age
+            if top_breakouts:
+                _apply_watchlist([res['ticker'] for res in top_breakouts])
+            else:
+                fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
+                _apply_watchlist(list(fallback_universe[:top_n]))
+            _notify("success", "Fetched latest candles (no cache).")
+            st.rerun()
+
     st.sidebar.markdown("---")
     st.sidebar.header("➕ Add Custom Stock")
     new_stock = st.sidebar.text_input(
