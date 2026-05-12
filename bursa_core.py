@@ -807,6 +807,12 @@ def get_stock_data(ticker, period="1y"):
     def _resolve_best_name() -> str:
         try:
             n = str(base_name or ticker)
+            try:
+                file_name = _file_universe_name(ticker)
+                if file_name:
+                    return str(file_name)
+            except Exception:
+                pass
             auto_name = _auto_universe_name(ticker)
             if auto_name:
                 return str(auto_name)
@@ -1147,7 +1153,12 @@ def _resolve_insight(ticker: str, resolved_name: str | None):
         name = resolved_name or code
         try:
             if str(name).strip().upper() in {t, code, f"{code}.KL"} or ".KL" in str(name).upper():
-                auto_name = _auto_universe_name(t) or _auto_universe_name(f"{code}.KL")
+                auto_name = (
+                    _file_universe_name(t)
+                    or _file_universe_name(f"{code}.KL")
+                    or _auto_universe_name(t)
+                    or _auto_universe_name(f"{code}.KL")
+                )
                 if auto_name:
                     name = auto_name
         except Exception:
@@ -1191,7 +1202,12 @@ def _resolve_insight_v3(ticker: str, resolved_name: str | None):
         name = resolved_name or code
         try:
             if str(name).strip().upper() in {t, code, f"{code}.KL"} or ".KL" in str(name).upper():
-                auto_name = _auto_universe_name(t) or _auto_universe_name(f"{code}.KL")
+                auto_name = (
+                    _file_universe_name(t)
+                    or _file_universe_name(f"{code}.KL")
+                    or _auto_universe_name(t)
+                    or _auto_universe_name(f"{code}.KL")
+                )
                 if auto_name:
                     name = auto_name
         except Exception:
@@ -2650,6 +2666,7 @@ BURSA_UNIVERSE_XLSX_FILE = os.path.join(os.path.dirname(__file__), "List_of_Comp
 
 _AUTO_UNIVERSE_NAME_CACHE = {"mtime": None, "map": {}}
 _AUTO_UNIVERSE_NAME_NORM_CACHE = {"mtime": None, "tokens": {}}
+_FILE_UNIVERSE_NAME_CACHE = {"mtime": None, "map": {}}
 
 
 def _read_universe_codes(raw_codes):
@@ -2718,6 +2735,63 @@ def _load_auto_universe_name_map():
             return {}
     except Exception:
         return {}
+
+
+def _load_file_universe_name_map():
+    try:
+        if not os.path.exists(BURSA_UNIVERSE_XLSX_FILE):
+            return {}
+        mtime = os.path.getmtime(BURSA_UNIVERSE_XLSX_FILE)
+        if _FILE_UNIVERSE_NAME_CACHE.get("mtime") == mtime and _FILE_UNIVERSE_NAME_CACHE.get("map"):
+            return _FILE_UNIVERSE_NAME_CACHE["map"]
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(BURSA_UNIVERSE_XLSX_FILE, read_only=True, data_only=True)
+        except Exception:
+            _FILE_UNIVERSE_NAME_CACHE["mtime"] = mtime
+            _FILE_UNIVERSE_NAME_CACHE["map"] = {}
+            return {}
+
+        out = {}
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            for row in ws.iter_rows(values_only=True):
+                if not row or len(row) < 4:
+                    continue
+                name = None
+                code = None
+                try:
+                    name = str(row[1]).strip() if row[1] is not None else ""
+                except Exception:
+                    name = ""
+                try:
+                    code = str(row[3]).strip() if row[3] is not None else ""
+                except Exception:
+                    code = ""
+                if not code:
+                    continue
+                if "STOCK" in str(code).upper() and "CODE" in str(code).upper():
+                    continue
+                t = _normalize_kl_ticker(code)
+                if not t:
+                    continue
+                if name and name.upper() not in {"PUBLIC LISTED COMPANIES", "STOCK CODE"}:
+                    out[str(t).upper()] = name
+        _FILE_UNIVERSE_NAME_CACHE["mtime"] = mtime
+        _FILE_UNIVERSE_NAME_CACHE["map"] = out
+        return out
+    except Exception:
+        return {}
+
+
+def _file_universe_name(ticker: str) -> str | None:
+    try:
+        t = str(ticker).upper().strip()
+        if not t:
+            return None
+        return _load_file_universe_name_map().get(t)
+    except Exception:
+        return None
 
 
 def _auto_universe_name(ticker: str):
