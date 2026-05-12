@@ -6,6 +6,7 @@ import re
 import csv
 import time
 import xml.etree.ElementTree as ET
+import zipfile
 from email.utils import parsedate_to_datetime
 from html import unescape
 from urllib.parse import quote_plus
@@ -1002,12 +1003,17 @@ def get_stock_data(ticker, period="1y"):
                 # Only try yfinance info if we don't have a good name yet
                 if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
                     try:
-                        auto_name = _auto_universe_name(symbol) or _auto_universe_name(ticker)
-                        if auto_name:
-                            name = auto_name
+                        mapped_name = (
+                            _file_universe_name(symbol)
+                            or _file_universe_name(ticker)
+                            or _auto_universe_name(symbol)
+                            or _auto_universe_name(ticker)
+                        )
+                        if mapped_name:
+                            name = mapped_name
                     except Exception:
                         pass
-                if name == ticker or ".KL" in str(name):
+                if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
                     try:
                         yf_info = stock.info
                         name = yf_info.get('shortName') or yf_info.get('longName') or name
@@ -1044,11 +1050,22 @@ def get_stock_data(ticker, period="1y"):
             if df2 is not None and not df2.empty:
                 name = base_name
                 try:
-                    auto_name = _auto_universe_name(symbol) or _auto_universe_name(ticker)
-                    if auto_name:
-                        name = auto_name
+                    mapped_name = (
+                        _file_universe_name(symbol)
+                        or _file_universe_name(ticker)
+                        or _auto_universe_name(symbol)
+                        or _auto_universe_name(ticker)
+                    )
+                    if mapped_name:
+                        name = mapped_name
                 except Exception:
                     pass
+                if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
+                    try:
+                        yf_info = yf.Ticker(symbol).info
+                        name = yf_info.get('shortName') or yf_info.get('longName') or name
+                    except Exception:
+                        pass
                 if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
                     try:
                         it_name = _itick_stock_name(ticker)
@@ -1080,11 +1097,22 @@ def get_stock_data(ticker, period="1y"):
             if df3 is not None and not df3.empty:
                 name = base_name
                 try:
-                    auto_name = _auto_universe_name(symbol) or _auto_universe_name(ticker)
-                    if auto_name:
-                        name = auto_name
+                    mapped_name = (
+                        _file_universe_name(symbol)
+                        or _file_universe_name(ticker)
+                        or _auto_universe_name(symbol)
+                        or _auto_universe_name(ticker)
+                    )
+                    if mapped_name:
+                        name = mapped_name
                 except Exception:
                     pass
+                if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
+                    try:
+                        yf_info = yf.Ticker(symbol).info
+                        name = yf_info.get('shortName') or yf_info.get('longName') or name
+                    except Exception:
+                        pass
                 if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
                     try:
                         it_name = _itick_stock_name(ticker)
@@ -2718,6 +2746,123 @@ def _load_auto_universe_name_map():
         return {}
 
 
+<<<<<<< Updated upstream
+=======
+def _load_file_universe_name_map():
+    try:
+        if not os.path.exists(BURSA_UNIVERSE_XLSX_FILE):
+            return {}
+        mtime = os.path.getmtime(BURSA_UNIVERSE_XLSX_FILE)
+        if _FILE_UNIVERSE_NAME_CACHE.get("mtime") == mtime and _FILE_UNIVERSE_NAME_CACHE.get("map"):
+            return _FILE_UNIVERSE_NAME_CACHE["map"]
+
+        out = {}
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(BURSA_UNIVERSE_XLSX_FILE, read_only=True, data_only=True)
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                for row in ws.iter_rows(values_only=True):
+                    if not row or len(row) < 4:
+                        continue
+                    try:
+                        name = str(row[1]).strip() if row[1] is not None else ""
+                    except Exception:
+                        name = ""
+                    try:
+                        code = str(row[3]).strip() if row[3] is not None else ""
+                    except Exception:
+                        code = ""
+                    if not code:
+                        continue
+                    if "STOCK" in str(code).upper() and "CODE" in str(code).upper():
+                        continue
+                    t = _normalize_kl_ticker(code)
+                    if not t:
+                        continue
+                    if name and name.upper() not in {"PUBLIC LISTED COMPANIES", "STOCK CODE"}:
+                        out[str(t).upper()] = name
+        except Exception:
+            try:
+                with zipfile.ZipFile(BURSA_UNIVERSE_XLSX_FILE, "r") as zf:
+                    ss = []
+                    try:
+                        root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+                        for si in root.iter():
+                            if si.tag.endswith("t"):
+                                ss.append(si.text or "")
+                    except Exception:
+                        ss = []
+                    try:
+                        sheet_xml = zf.read("xl/worksheets/sheet1.xml")
+                        root = ET.fromstring(sheet_xml)
+                        rows = {}
+                        for c in root.iter():
+                            if not c.tag.endswith("c"):
+                                continue
+                            r = c.attrib.get("r") or ""
+                            if not r:
+                                continue
+                            col = re.sub(r"\d+", "", r).upper()
+                            if col not in {"B", "D"}:
+                                continue
+                            row_i = int(re.sub(r"\D+", "", r) or "0")
+                            if row_i <= 0:
+                                continue
+                            t_attr = c.attrib.get("t")
+                            v_txt = None
+                            if t_attr == "inlineStr":
+                                for t_el in c.iter():
+                                    if t_el.tag.endswith("t"):
+                                        v_txt = t_el.text
+                                        break
+                            else:
+                                for v_el in c.iter():
+                                    if v_el.tag.endswith("v"):
+                                        v_txt = v_el.text
+                                        break
+                                if t_attr == "s" and v_txt is not None:
+                                    try:
+                                        v_txt = ss[int(str(v_txt).strip())]
+                                    except Exception:
+                                        pass
+                            if v_txt is None:
+                                continue
+                            rows.setdefault(row_i, {})[col] = str(v_txt).strip()
+                        for _, d in rows.items():
+                            name = str(d.get("B") or "").strip()
+                            code = str(d.get("D") or "").strip()
+                            if not code:
+                                continue
+                            if "STOCK" in code.upper() and "CODE" in code.upper():
+                                continue
+                            t = _normalize_kl_ticker(code)
+                            if not t:
+                                continue
+                            if name and name.upper() not in {"PUBLIC LISTED COMPANIES", "STOCK CODE"}:
+                                out[str(t).upper()] = name
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        _FILE_UNIVERSE_NAME_CACHE["mtime"] = mtime
+        _FILE_UNIVERSE_NAME_CACHE["map"] = out
+        return out
+    except Exception:
+        return {}
+
+
+def _file_universe_name(ticker: str) -> str | None:
+    try:
+        t = str(ticker).upper().strip()
+        if not t:
+            return None
+        return _load_file_universe_name_map().get(t)
+    except Exception:
+        return None
+
+
+>>>>>>> Stashed changes
 def _auto_universe_name(ticker: str):
     try:
         t = str(ticker).upper().strip()
@@ -2891,6 +3036,87 @@ def _load_universe_from_file(path: str):
     except Exception:
         return []
 
+<<<<<<< Updated upstream
+=======
+
+def _load_universe_from_xlsx(path: str) -> list[str]:
+    try:
+        if not path or not os.path.exists(path):
+            return []
+        raw = []
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                for row in ws.iter_rows(values_only=True):
+                    if not row:
+                        continue
+                    if len(row) >= 4 and row[3] is not None:
+                        raw.append(str(row[3]))
+        except Exception:
+            try:
+                with zipfile.ZipFile(path, "r") as zf:
+                    sheet_xml = zf.read("xl/worksheets/sheet1.xml")
+                    root = ET.fromstring(sheet_xml)
+                    for c in root.iter():
+                        if not c.tag.endswith("c"):
+                            continue
+                        r = c.attrib.get("r") or ""
+                        if not r:
+                            continue
+                        col = re.sub(r"\d+", "", r).upper()
+                        if col != "D":
+                            continue
+                        v_txt = None
+                        t_attr = c.attrib.get("t")
+                        if t_attr == "inlineStr":
+                            for t_el in c.iter():
+                                if t_el.tag.endswith("t"):
+                                    v_txt = t_el.text
+                                    break
+                        else:
+                            for v_el in c.iter():
+                                if v_el.tag.endswith("v"):
+                                    v_txt = v_el.text
+                                    break
+                        if v_txt is not None:
+                            raw.append(str(v_txt))
+            except Exception:
+                try:
+                    sheets = pd.read_excel(path, sheet_name=None, dtype=str)
+                except Exception:
+                    return []
+            except Exception:
+                return []
+            for _, df in (sheets or {}).items():
+                if df is None or df.empty:
+                    continue
+                cols = list(df.columns)
+                if len(cols) >= 4:
+                    try:
+                        raw.extend(df[cols[3]].dropna().astype(str).tolist())
+                    except Exception:
+                        pass
+        out = []
+        for x in raw:
+            t = _normalize_kl_ticker(x)
+            if t:
+                out.append(t)
+                continue
+            try:
+                m = re.search(r"\b(\d{4})\b", str(x))
+                if m:
+                    t2 = _normalize_kl_ticker(m.group(1))
+                    if t2:
+                        out.append(t2)
+            except Exception:
+                pass
+        return sorted({t for t in out if t})
+    except Exception:
+        return []
+
+>>>>>>> Stashed changes
 def get_stock_universe(mode: str = "curated"):
     m = str(mode or "").lower().strip()
     if m in {"focus", "focus-sectors", "myfocus", "focus_large_mid"}:
