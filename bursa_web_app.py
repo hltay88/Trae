@@ -731,6 +731,10 @@ if not popup_mode:
             st.rerun()
     if st.session_state.universe_mode == "file":
         st.sidebar.caption("Universe source: bursa_universe.csv and/or List_of_Companies.xlsx in the app folder. Use 4-digit codes (Main + ACE), e.g. 6742 or 6742.KL.")
+        try:
+            import openpyxl  # noqa: F401
+        except Exception:
+            st.sidebar.warning("Excel universe/name lookup requires openpyxl. Install it with: pip install openpyxl")
 
     model_label = st.sidebar.radio(
         "Breakout Model",
