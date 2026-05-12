@@ -730,7 +730,7 @@ if not popup_mode:
                     _apply_watchlist(list(fallback_universe[:top_n]))
             st.rerun()
     if st.session_state.universe_mode == "file":
-        st.sidebar.caption("Universe source: bursa_universe.csv in the app folder. Put one 4-digit stock code per line (Main + ACE). Example: 6742 or 6742.KL.")
+        st.sidebar.caption("Universe source: bursa_universe.csv and/or List_of_Companies.xlsx in the app folder. Use 4-digit codes (Main + ACE), e.g. 6742 or 6742.KL.")
 
     model_label = st.sidebar.radio(
         "Breakout Model",

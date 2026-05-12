@@ -13,3 +13,4 @@ frozendict
 beautifulsoup4
 cryptography
 scipy
+openpyxl

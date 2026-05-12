@@ -2645,6 +2645,7 @@ STOCK_DISCOVERY_UNIVERSE = sorted(
 
 BURSA_UNIVERSE_FILE = os.path.join(os.path.dirname(__file__), "bursa_universe.csv")
 BURSA_UNIVERSE_AUTO_FILE = os.path.join(os.path.dirname(__file__), "bursa_universe_auto.csv")
+BURSA_UNIVERSE_XLSX_FILE = os.path.join(os.path.dirname(__file__), "List_of_Companies.xlsx")
 
 _AUTO_UNIVERSE_NAME_CACHE = {"mtime": None, "map": {}}
 _AUTO_UNIVERSE_NAME_NORM_CACHE = {"mtime": None, "tokens": {}}
@@ -2891,6 +2892,59 @@ def _load_universe_from_file(path: str):
     except Exception:
         return []
 
+
+def _load_universe_from_xlsx(path: str) -> list[str]:
+    try:
+        if not path or not os.path.exists(path):
+            return []
+        try:
+            import openpyxl  # noqa: F401
+        except Exception:
+            return []
+        try:
+            sheets = pd.read_excel(path, sheet_name=None, dtype=str)
+        except Exception:
+            return []
+        raw = []
+        for _, df in (sheets or {}).items():
+            if df is None or df.empty:
+                continue
+            cols = list(df.columns)
+            preferred = []
+            for c in cols:
+                cl = str(c).strip().lower()
+                if any(k in cl for k in ["code", "ticker", "symbol"]):
+                    preferred.append(c)
+            if preferred:
+                use_cols = preferred
+            elif len(cols) >= 4:
+                use_cols = [cols[3]]
+            else:
+                use_cols = ([cols[0]] if cols else [])
+            for c in use_cols:
+                try:
+                    vals = df[c].dropna().astype(str).tolist()
+                except Exception:
+                    continue
+                raw.extend(vals)
+        out = []
+        for x in raw:
+            t = _normalize_kl_ticker(x)
+            if t:
+                out.append(t)
+                continue
+            try:
+                m = re.search(r"\b(\d{4})\b", str(x))
+                if m:
+                    t2 = _normalize_kl_ticker(m.group(1))
+                    if t2:
+                        out.append(t2)
+            except Exception:
+                pass
+        return sorted({t for t in out if t})
+    except Exception:
+        return []
+
 def get_stock_universe(mode: str = "curated"):
     m = str(mode or "").lower().strip()
     if m in {"focus", "focus-sectors", "myfocus", "focus_large_mid"}:
@@ -2951,9 +3005,21 @@ def get_stock_universe(mode: str = "curated"):
         if u:
             return u, "auto"
     if m in {"file", "full", "all"}:
-        u = _load_universe_from_file(BURSA_UNIVERSE_FILE)
-        if u:
-            return u, "file"
+        u = []
+        try:
+            u = _load_universe_from_file(BURSA_UNIVERSE_FILE)
+        except Exception:
+            u = []
+        u_x = []
+        try:
+            u_x = _load_universe_from_xlsx(BURSA_UNIVERSE_XLSX_FILE)
+        except Exception:
+            u_x = []
+        merged = sorted({str(x).upper().strip() for x in (u or []) + (u_x or []) if _normalize_kl_ticker(x)})
+        if merged:
+            if u_x:
+                return merged, "file+xlsx"
+            return merged, "file"
     return STOCK_DISCOVERY_UNIVERSE, "curated"
 
 # --- MALAYSIAN FUTURES ---
