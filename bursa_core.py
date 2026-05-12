@@ -2178,7 +2178,8 @@ def _normalize_kl_ticker(x: str) -> str | None:
         s = s.replace(" ", "")
         if s.endswith(".KL"):
             s = s[:-3]
-        if s.isdigit() and len(s) == 4:
+        if s.isdigit() and len(s) <= 4:
+            s = s.zfill(4)
             return f"{s}.KL"
         return None
     except Exception:
@@ -2901,32 +2902,31 @@ def _load_universe_from_xlsx(path: str) -> list[str]:
             import openpyxl  # noqa: F401
         except Exception:
             return []
-        try:
-            sheets = pd.read_excel(path, sheet_name=None, dtype=str)
-        except Exception:
-            return []
         raw = []
-        for _, df in (sheets or {}).items():
-            if df is None or df.empty:
-                continue
-            cols = list(df.columns)
-            preferred = []
-            for c in cols:
-                cl = str(c).strip().lower()
-                if any(k in cl for k in ["code", "ticker", "symbol"]):
-                    preferred.append(c)
-            if preferred:
-                use_cols = preferred
-            elif len(cols) >= 4:
-                use_cols = [cols[3]]
-            else:
-                use_cols = ([cols[0]] if cols else [])
-            for c in use_cols:
-                try:
-                    vals = df[c].dropna().astype(str).tolist()
-                except Exception:
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                for row in ws.iter_rows(values_only=True):
+                    if not row:
+                        continue
+                    if len(row) >= 4 and row[3] is not None:
+                        raw.append(str(row[3]))
+        except Exception:
+            try:
+                sheets = pd.read_excel(path, sheet_name=None, dtype=str)
+            except Exception:
+                return []
+            for _, df in (sheets or {}).items():
+                if df is None or df.empty:
                     continue
-                raw.extend(vals)
+                cols = list(df.columns)
+                if len(cols) >= 4:
+                    try:
+                        raw.extend(df[cols[3]].dropna().astype(str).tolist())
+                    except Exception:
+                        pass
         out = []
         for x in raw:
             t = _normalize_kl_ticker(x)
