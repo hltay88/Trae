@@ -15,6 +15,7 @@ import plotly.graph_objects as go
 import pandas as pd
 import time
 import os
+import tempfile
 import hashlib
 import hmac
 import base64
@@ -38,6 +39,173 @@ get_futures_breakouts = _core.get_futures_breakouts
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Lawrence Breakout Analyzer", layout="wide", page_icon="📈")
+
+# --- CACHING (performance) ---
+# Streamlit reruns often; caching makes the app feel much faster after the first load.
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_stock_data(ticker: str, period: str = "1y"):
+    return get_stock_data(ticker, period=period)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_top_breakouts(*, limit: int, model: str, universe_mode: str, sector_allowlist, signal_lookback: int, max_runup_pct, max_pullback_pct, retest_days: int, max_tickers, scan_params: dict):
+    return get_top_breakouts(
+        limit=limit,
+        model=model,
+        universe_mode=universe_mode,
+        sector_allowlist=sector_allowlist,
+        signal_lookback=signal_lookback,
+        max_runup_pct=max_runup_pct,
+        max_pullback_pct=max_pullback_pct,
+        retest_days=retest_days,
+        max_tickers=max_tickers,
+        **(scan_params or {}),
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_futures_breakouts():
+    return get_futures_breakouts()
+
+
+# --- LOCAL STATE (persistent watchlist/settings) ---
+_STATE_FILE_NAME = "bursa_web_state.json"
+
+
+def _state_file_path() -> Path:
+    candidates = []
+    try:
+        candidates.append(Path(__file__).resolve().parent)
+    except Exception:
+        pass
+    try:
+        candidates.append(Path.cwd())
+    except Exception:
+        pass
+    try:
+        candidates.append(Path(tempfile.gettempdir()))
+    except Exception:
+        pass
+
+    for d in candidates:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            return d / _STATE_FILE_NAME
+        except Exception:
+            continue
+    return Path(tempfile.gettempdir()) / _STATE_FILE_NAME
+
+
+def _load_persisted_state() -> dict:
+    p = _state_file_path()
+    try:
+        if not p.exists():
+            return {}
+        raw = p.read_text(encoding="utf-8", errors="ignore")
+        j = json.loads(raw)
+        return j if isinstance(j, dict) else {}
+    except Exception:
+        return {}
+
+
+def _persisted_state_payload() -> dict:
+    keys = [
+        "manual_watchlist",
+        "universe_mode",
+        "breakout_model",
+        "top_results_limit",
+        "max_tickers_scan",
+        "sector_focus",
+        "v3_entry_style",
+        "v3_signal_filter",
+        "v3_signal_lookback",
+        "v3_max_runup_pct",
+        "v3_max_pullback_pct",
+        "v3_retest_days",
+        "v3_breakout_buffer_pct",
+        "v3_volume_spike_mult",
+        "v3_power_close_pos_min",
+        "v3_power_body_pct_min",
+        "v3_min_traded_value20",
+        "v3_require_rs_positive",
+        "v3_require_atr_contraction",
+        "v3_require_benchmark_trend",
+        "show_indicators",
+    ]
+    out = {"_v": 1}
+    for k in keys:
+        try:
+            if k in st.session_state:
+                out[k] = st.session_state.get(k)
+        except Exception:
+            continue
+    return out
+
+
+def _apply_persisted_state_once() -> None:
+    if st.session_state.get("_persist_loaded"):
+        return
+    st.session_state._persist_loaded = True
+
+    state = _load_persisted_state()
+    if not state:
+        return
+
+    # Only fill keys that haven't been set in this session.
+    for k, v in state.items():
+        if k.startswith("_"):
+            continue
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+
+def _save_state_if_changed() -> None:
+    try:
+        payload = _persisted_state_payload()
+        blob = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        h = hashlib.sha256(blob.encode("utf-8")).hexdigest()
+        if st.session_state.get("_persist_hash") == h:
+            return
+        st.session_state._persist_hash = h
+        _state_file_path().write_text(blob, encoding="utf-8")
+    except Exception:
+        return
+
+
+def _fmt_float(v, ndp: int = 4):
+    try:
+        if v is None:
+            return ""
+        x = float(v)
+        if x != x:
+            return ""
+        return f"{x:.{int(ndp)}f}"
+    except Exception:
+        return ""
+
+
+def _fmt_pct(v, ndp: int = 2):
+    try:
+        if v is None:
+            return ""
+        x = float(v)
+        if x != x:
+            return ""
+        return f"{x * 100:.{int(ndp)}f}%"
+    except Exception:
+        return ""
+
+
+def _fmt_x(v, ndp: int = 2):
+    try:
+        if v is None:
+            return ""
+        x = float(v)
+        if x != x:
+            return ""
+        return f"{x:.{int(ndp)}f}x"
+    except Exception:
+        return ""
 
 def _get_secret_value(key: str) -> str | None:
     try:
@@ -322,11 +490,11 @@ def _render_chart(symbol: str):
     if tv_url:
         st.markdown(f"[Open this chart in TradingView (live)]({tv_url})")
 
-    df_chart, name_chart = get_stock_data(symbol, period="5y")
+    df_chart, name_chart = _cached_stock_data(symbol, period="5y")
 
     if df_chart is None or df_chart.empty:
         st.warning(f"5-year data unavailable for {symbol}. Trying 1-year data...")
-        df_chart, name_chart = get_stock_data(symbol, period="1y")
+        df_chart, name_chart = _cached_stock_data(symbol, period="1y")
 
     try:
         if hasattr(_core, "_resolve_insight_v3"):
@@ -411,11 +579,65 @@ def _render_chart(symbol: str):
     vol_fig.update_yaxes(tickformat="~s")
     st.plotly_chart(vol_fig, use_container_width=True)
 
+    # Optional lightweight indicators panel (MACD + ATR%)
+    show_ind = bool(st.session_state.get("show_indicators", True))
+    try:
+        if popup_mode:
+            show_ind = bool(st.checkbox("Show indicators (MACD / ATR%)", value=show_ind))
+            st.session_state.show_indicators = show_ind
+    except Exception:
+        pass
+
+    if show_ind:
+        try:
+            close = pd.to_numeric(plot_df.get("Close"), errors="coerce")
+            high = pd.to_numeric(plot_df.get("High"), errors="coerce")
+            low = pd.to_numeric(plot_df.get("Low"), errors="coerce")
+
+            ema12 = close.ewm(span=12, adjust=False).mean()
+            ema26 = close.ewm(span=26, adjust=False).mean()
+            macd = ema12 - ema26
+            sig = macd.ewm(span=9, adjust=False).mean()
+            hist = macd - sig
+
+            prev_close = close.shift(1)
+            tr = pd.concat(
+                [
+                    (high - low).abs(),
+                    (high - prev_close).abs(),
+                    (low - prev_close).abs(),
+                ],
+                axis=1,
+            ).max(axis=1)
+            atr14 = tr.rolling(window=14).mean()
+            atr_pct = atr14 / close
+
+            ind_fig = go.Figure()
+            ind_fig.add_trace(go.Bar(x=plot_df.index, y=hist, name="MACD Hist", marker_color="rgba(0,200,255,0.55)"))
+            ind_fig.add_trace(go.Scatter(x=plot_df.index, y=macd, name="MACD", line=dict(color="white", width=1)))
+            ind_fig.add_trace(go.Scatter(x=plot_df.index, y=sig, name="Signal", line=dict(color="orange", width=1)))
+            ind_fig.add_trace(go.Scatter(x=plot_df.index, y=atr_pct, name="ATR% (14)", yaxis="y2", line=dict(color="lime", width=1)))
+
+            ind_fig.update_layout(
+                title="Indicators (MACD + ATR%)",
+                height=360,
+                template="plotly_dark",
+                yaxis=dict(title="MACD"),
+                yaxis2=dict(title="ATR%", overlaying="y", side="right", tickformat=".2%"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            )
+            st.plotly_chart(ind_fig, use_container_width=True)
+        except Exception:
+            st.caption("Indicators unavailable for this chart (insufficient data).")
+
 
 chart_symbol = _get_query_param("chart")
 popup_mode = _get_query_param("popup")
 
 _require_login(bool(popup_mode))
+
+# Load previously saved watchlist/settings (if any) before setting defaults.
+_apply_persisted_state_once()
 
 if "breakout_model" not in st.session_state:
     st.session_state.breakout_model = "v3"
@@ -451,6 +673,8 @@ if "v3_require_atr_contraction" not in st.session_state:
     st.session_state.v3_require_atr_contraction = False
 if "v3_require_benchmark_trend" not in st.session_state:
     st.session_state.v3_require_benchmark_trend = False
+if "show_indicators" not in st.session_state:
+    st.session_state.show_indicators = True
 
 # --- UI ---
 if not chart_symbol:
@@ -574,6 +798,41 @@ def _scan_params_for_model(model_key: str) -> dict:
     return _v3_params_for_model(model_key)
 
 
+def _ui_get_top_breakouts(limit: int, no_cache: bool = False):
+    scan_params = _scan_params_for_model(st.session_state.breakout_model)
+    sector_allow = (st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3"} else None
+    max_tickers = st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None
+    if no_cache:
+        try:
+            _cached_top_breakouts.clear()
+        except Exception:
+            pass
+        return get_top_breakouts(
+            limit=int(limit),
+            model=st.session_state.breakout_model,
+            universe_mode=st.session_state.universe_mode,
+            sector_allowlist=sector_allow,
+            signal_lookback=st.session_state.v3_signal_lookback,
+            max_runup_pct=st.session_state.v3_max_runup_pct,
+            max_pullback_pct=st.session_state.v3_max_pullback_pct,
+            retest_days=st.session_state.v3_retest_days,
+            max_tickers=max_tickers,
+            **(scan_params or {}),
+        )
+    return _cached_top_breakouts(
+        limit=int(limit),
+        model=st.session_state.breakout_model,
+        universe_mode=st.session_state.universe_mode,
+        sector_allowlist=sector_allow,
+        signal_lookback=st.session_state.v3_signal_lookback,
+        max_runup_pct=st.session_state.v3_max_runup_pct,
+        max_pullback_pct=st.session_state.v3_max_pullback_pct,
+        retest_days=st.session_state.v3_retest_days,
+        max_tickers=max_tickers,
+        scan_params=(scan_params or {}),
+    )
+
+
 # Initialize session state for watchlist
 if 'watchlist' not in st.session_state:
     with st.spinner("Initializing Market Discovery..."):
@@ -585,18 +844,7 @@ if 'watchlist' not in st.session_state:
             top_n = 10
         if top_n > 200:
             top_n = 200
-        top_breakouts = get_top_breakouts(
-            limit=top_n,
-            model=st.session_state.breakout_model,
-            universe_mode=st.session_state.universe_mode,
-            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3"} else None,
-            signal_lookback=st.session_state.v3_signal_lookback,
-            max_runup_pct=st.session_state.v3_max_runup_pct,
-            max_pullback_pct=st.session_state.v3_max_pullback_pct,
-            retest_days=st.session_state.v3_retest_days,
-            max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
-            **_scan_params_for_model(st.session_state.breakout_model),
-        )
+        top_breakouts = _ui_get_top_breakouts(limit=top_n)
         if top_breakouts:
             _apply_watchlist([res['ticker'] for res in top_breakouts])
         else:
@@ -628,18 +876,7 @@ if not popup_mode:
     if int(top_n_ui) != int(st.session_state.get("top_results_limit") or 20):
         st.session_state.top_results_limit = int(top_n_ui)
         with st.spinner("Refreshing list for selected top results..."):
-            top_breakouts = get_top_breakouts(
-                limit=int(st.session_state.top_results_limit),
-                model=st.session_state.breakout_model,
-                universe_mode=st.session_state.universe_mode,
-                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3"} else None,
-                signal_lookback=st.session_state.v3_signal_lookback,
-                max_runup_pct=st.session_state.v3_max_runup_pct,
-                max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                retest_days=st.session_state.v3_retest_days,
-                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
-                **_scan_params_for_model(st.session_state.breakout_model),
-            )
+            top_breakouts = _ui_get_top_breakouts(limit=int(st.session_state.top_results_limit))
             if top_breakouts:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
             else:
@@ -684,18 +921,7 @@ if not popup_mode:
     if selected_universe != st.session_state.universe_mode:
         st.session_state.universe_mode = selected_universe
         with st.spinner("Refreshing list for selected universe..."):
-            top_breakouts = get_top_breakouts(
-                limit=top_n,
-                model=st.session_state.breakout_model,
-                universe_mode=st.session_state.universe_mode,
-                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3"} else None,
-                signal_lookback=st.session_state.v3_signal_lookback,
-                max_runup_pct=st.session_state.v3_max_runup_pct,
-                max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                retest_days=st.session_state.v3_retest_days,
-                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
-                **_scan_params_for_model(st.session_state.breakout_model),
-            )
+            top_breakouts = _ui_get_top_breakouts(limit=top_n)
             if top_breakouts:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
             else:
@@ -711,18 +937,7 @@ if not popup_mode:
         if int(max_scan) != int(st.session_state.max_tickers_scan):
             st.session_state.max_tickers_scan = int(max_scan)
             with st.spinner("Refreshing list for scan size..."):
-                top_breakouts = get_top_breakouts(
-                    limit=top_n,
-                    model=st.session_state.breakout_model,
-                    universe_mode=st.session_state.universe_mode,
-                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3"} else None,
-                    signal_lookback=st.session_state.v3_signal_lookback,
-                    max_runup_pct=st.session_state.v3_max_runup_pct,
-                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                    retest_days=st.session_state.v3_retest_days,
-                    max_tickers=st.session_state.max_tickers_scan,
-                    **_scan_params_for_model(st.session_state.breakout_model),
-                )
+                top_breakouts = _ui_get_top_breakouts(limit=top_n)
                 if top_breakouts:
                     _apply_watchlist([res['ticker'] for res in top_breakouts])
                 else:
@@ -731,6 +946,13 @@ if not popup_mode:
             st.rerun()
     if st.session_state.universe_mode == "file":
         st.sidebar.caption("Universe source: bursa_universe.csv in the app folder. Put one 4-digit stock code per line (Main + ACE). Example: 6742 or 6742.KL.")
+
+    st.sidebar.toggle(
+        "Show indicator columns (MACD/ATR/Vol)",
+        value=bool(st.session_state.get("show_indicators", True)),
+        key="show_indicators",
+        help="Adds extra columns to the tables and shows an extra indicator panel in the chart view.",
+    )
 
     model_label = st.sidebar.radio(
         "Breakout Model",
@@ -742,18 +964,7 @@ if not popup_mode:
     if selected_model != st.session_state.breakout_model:
         st.session_state.breakout_model = selected_model
         with st.spinner("Refreshing list for selected model..."):
-            top_breakouts = get_top_breakouts(
-                limit=top_n,
-                model=st.session_state.breakout_model,
-                universe_mode=st.session_state.universe_mode,
-                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3"} else None,
-                signal_lookback=st.session_state.v3_signal_lookback,
-                max_runup_pct=st.session_state.v3_max_runup_pct,
-                max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                retest_days=st.session_state.v3_retest_days,
-                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
-                **_scan_params_for_model(st.session_state.breakout_model),
-            )
+            top_breakouts = _ui_get_top_breakouts(limit=top_n)
             if top_breakouts:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
             else:
@@ -895,18 +1106,7 @@ if not popup_mode:
                         scan_limit = 10
                     if scan_limit > 200:
                         scan_limit = 200
-                top_breakouts = get_top_breakouts(
-                    limit=scan_limit,
-                    model=st.session_state.breakout_model,
-                    universe_mode=st.session_state.universe_mode,
-                    sector_allowlist=st.session_state.sector_focus or None,
-                    signal_lookback=st.session_state.v3_signal_lookback,
-                    max_runup_pct=st.session_state.v3_max_runup_pct,
-                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                    retest_days=st.session_state.v3_retest_days,
-                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
-                    **_scan_params_for_model(st.session_state.breakout_model),
-                )
+                top_breakouts = _ui_get_top_breakouts(limit=scan_limit)
                 if st.session_state.v3_signal_filter in {"late", "failed"}:
                     filtered = []
                     for r in top_breakouts:
@@ -1037,18 +1237,7 @@ if not popup_mode:
             if new_adv != prev_adv:
                 st.session_state.v3_entry_style = "Custom"
                 with st.spinner("Refreshing list..."):
-                    top_breakouts = get_top_breakouts(
-                        limit=top_n,
-                        model=st.session_state.breakout_model,
-                        universe_mode=st.session_state.universe_mode,
-                        sector_allowlist=st.session_state.sector_focus or None,
-                        signal_lookback=st.session_state.v3_signal_lookback,
-                        max_runup_pct=st.session_state.v3_max_runup_pct,
-                        max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                        retest_days=st.session_state.v3_retest_days,
-                        max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
-                        **_scan_params_for_model(st.session_state.breakout_model),
-                    )
+                    top_breakouts = _ui_get_top_breakouts(limit=top_n)
                     _apply_watchlist([res['ticker'] for res in top_breakouts])
 
     sectors = sorted({str(v.get("sector")).strip() for v in MARKET_INSIGHTS.values() if str(v.get("sector") or "").strip()})
@@ -1061,35 +1250,13 @@ if not popup_mode:
         if selected_sectors != st.session_state.sector_focus:
             st.session_state.sector_focus = selected_sectors
             with st.spinner("Refreshing list for selected sector focus..."):
-                top_breakouts = get_top_breakouts(
-                    limit=top_n,
-                    model=st.session_state.breakout_model,
-                    universe_mode=st.session_state.universe_mode,
-                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3"} else None,
-                    signal_lookback=st.session_state.v3_signal_lookback,
-                    max_runup_pct=st.session_state.v3_max_runup_pct,
-                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                    retest_days=st.session_state.v3_retest_days,
-                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
-                    **_scan_params_for_model(st.session_state.breakout_model),
-                )
+                top_breakouts = _ui_get_top_breakouts(limit=top_n)
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
             st.rerun()
 
     if st.sidebar.button("🔄 Refresh Market Discovery", use_container_width=True):
         with st.spinner("Refreshing Market Discovery..."):
-            top_breakouts = get_top_breakouts(
-                limit=top_n,
-                model=st.session_state.breakout_model,
-                universe_mode=st.session_state.universe_mode,
-                sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3"} else None,
-                signal_lookback=st.session_state.v3_signal_lookback,
-                max_runup_pct=st.session_state.v3_max_runup_pct,
-                max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                retest_days=st.session_state.v3_retest_days,
-                max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
-                **_scan_params_for_model(st.session_state.breakout_model),
-            )
+            top_breakouts = _ui_get_top_breakouts(limit=top_n)
             if top_breakouts:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
             else:
@@ -1100,26 +1267,11 @@ if not popup_mode:
 
     if st.sidebar.button("⚡ Fetch Latest Now (no cache)", use_container_width=True):
         with st.spinner("Fetching latest candles (no cache)..."):
-            prev_mode = getattr(_core, "PRICE_CACHE_MODE", "fast")
-            prev_age = getattr(_core, "PRICE_CACHE_MAX_AGE_SECONDS", 0)
             try:
-                _core.PRICE_CACHE_MODE = "latest"
-                _core.PRICE_CACHE_MAX_AGE_SECONDS = 0
-                top_breakouts = get_top_breakouts(
-                    limit=top_n,
-                    model=st.session_state.breakout_model,
-                    universe_mode=st.session_state.universe_mode,
-                    sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3"} else None,
-                    signal_lookback=st.session_state.v3_signal_lookback,
-                    max_runup_pct=st.session_state.v3_max_runup_pct,
-                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
-                    retest_days=st.session_state.v3_retest_days,
-                    max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
-                    **_scan_params_for_model(st.session_state.breakout_model),
-                )
-            finally:
-                _core.PRICE_CACHE_MODE = prev_mode
-                _core.PRICE_CACHE_MAX_AGE_SECONDS = prev_age
+                _cached_stock_data.clear()
+            except Exception:
+                pass
+            top_breakouts = _ui_get_top_breakouts(limit=top_n, no_cache=True)
             if top_breakouts:
                 _apply_watchlist([res['ticker'] for res in top_breakouts])
             else:
@@ -1170,19 +1322,26 @@ if not popup_mode:
         _apply_watchlist(st.session_state.get("watchlist") or [])
         st.rerun()
 
+    # --- Downloads (Watchlist) ---
+    st.sidebar.markdown("---")
+    st.sidebar.header("⬇️ Downloads")
+    try:
+        wl = _uniq_tickers(st.session_state.get("watchlist") or [])
+        manual_wl = set(_uniq_tickers(st.session_state.get("manual_watchlist") or []))
+        rows = []
+        for t in wl:
+            kind = "Futures" if "=F" in t else ("Index" if str(t).startswith("^") else "Stock")
+            rows.append({"ticker": t, "type": kind, "pinned": bool(t in manual_wl)})
+        wl_df = pd.DataFrame(rows)
+        wl_csv = wl_df.to_csv(index=False).encode("utf-8")
+        wl_txt = ("\n".join(wl) + ("\n" if wl else "")).encode("utf-8")
+        st.sidebar.download_button("Download watchlist (CSV)", data=wl_csv, file_name="watchlist.csv", mime="text/csv", use_container_width=True)
+        st.sidebar.download_button("Download watchlist (TXT)", data=wl_txt, file_name="watchlist.txt", mime="text/plain", use_container_width=True)
+    except Exception:
+        pass
+
     if st.sidebar.button(f"🗑️ Reset to Top {top_n}", use_container_width=True):
-        top_breakouts = get_top_breakouts(
-            limit=top_n,
-            model=st.session_state.breakout_model,
-            universe_mode=st.session_state.universe_mode,
-            sector_allowlist=(st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3"} else None,
-            signal_lookback=st.session_state.v3_signal_lookback,
-            max_runup_pct=st.session_state.v3_max_runup_pct,
-            max_pullback_pct=st.session_state.v3_max_pullback_pct,
-            retest_days=st.session_state.v3_retest_days,
-            max_tickers=(st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None),
-            **_scan_params_for_model(st.session_state.breakout_model),
-        )
+        top_breakouts = _ui_get_top_breakouts(limit=top_n)
         _apply_watchlist([res['ticker'] for res in top_breakouts])
         st.rerun()
 
@@ -1197,7 +1356,7 @@ with tab_stocks:
     benchmark_df = None
     if breakout_model in {"v2", "v3"}:
         try:
-            benchmark_df, _ = get_stock_data("^KLSE", period="1y")
+            benchmark_df, _ = _cached_stock_data("^KLSE", period="1y")
         except Exception:
             benchmark_df = None
 
@@ -1209,7 +1368,7 @@ with tab_stocks:
             if "=F" in t: continue
             fetch_attempted += 1
             is_manual = str(t).upper().strip() in manual_set
-            df, name = get_stock_data(t, period="1y")
+            df, name = _cached_stock_data(t, period="1y")
             if df is not None and not df.empty:
                 fetch_success += 1
                 if breakout_model == "v3":
@@ -1459,6 +1618,8 @@ with tab_stocks:
         
         # Prepare display dataframe
         display_rows = []
+        export_rows = []
+        show_ind = bool(st.session_state.get("show_indicators", True))
         try:
             auth_tok = st.session_state.get("auth_token")
         except Exception:
@@ -1498,7 +1659,7 @@ with tab_stocks:
             if runup_or_dist is None and r.get("distance_to_breakout_pct") is not None:
                 runup_or_dist = r.get("distance_to_breakout_pct")
 
-            display_rows.append({
+            disp = {
                 "Ticker": r['ticker'],
                 "Name": linked_name,
                 "Sector": r.get("sector", ""),
@@ -1512,10 +1673,48 @@ with tab_stocks:
                 "Run-up %": "" if runup_or_dist is None else f"{float(runup_or_dist):.1f}%",
                 "Status": status,
                 "Catalyst / Insight": (r['catalyst'] if score_val >= neutral_threshold else r['analysis'])
-            })
+            }
+            exp = {
+                "Ticker": str(r.get("ticker") or ""),
+                "Name": str(r.get("name") or ""),
+                "Sector": str(r.get("sector") or ""),
+                "Last Price (RM)": float(r.get("price") or 0.0),
+                "Score": f"{score_val}/{score_max}",
+                "RSI": float(r.get("rsi") or 0.0),
+                "Signal": str(signal_text),
+                "Signal Date": str(r.get("breakout_candle_date") or ""),
+                "Retest Confirmed": bool(r.get("retest_confirmed")),
+                "Retest Date": str(r.get("retest_touch_date") or ""),
+                "Run-up %": None if runup_or_dist is None else float(runup_or_dist),
+                "Status": str(status).strip(),
+                "Catalyst": str(r.get("catalyst") or ""),
+                "Insight": str(r.get("analysis") or ""),
+            }
+
+            if show_ind:
+                disp["MACD Hist"] = _fmt_float(r.get("macd_hist"), 4)
+                disp["ATR% (14)"] = _fmt_pct(r.get("atr_pct"), 2)
+                disp["Vol/Avg20"] = _fmt_x(r.get("vol_ratio20"), 2)
+                exp["MACD Hist"] = None if r.get("macd_hist") is None else float(r.get("macd_hist"))
+                exp["ATR% (14)"] = None if r.get("atr_pct") is None else float(r.get("atr_pct"))
+                exp["Vol/Avg20"] = None if r.get("vol_ratio20") is None else float(r.get("vol_ratio20"))
+
+            display_rows.append(disp)
+            export_rows.append(exp)
         
         df_display = pd.DataFrame(display_rows)
+        df_export = pd.DataFrame(export_rows)
         st.caption("Tip: click the stock name to open its chart in a new window/tab.")
+        try:
+            st.download_button(
+                "Download Stock Breakouts (CSV)",
+                data=df_export.to_csv(index=False).encode("utf-8"),
+                file_name="stock_breakouts.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        except Exception:
+            pass
         st.markdown(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
     else:
         st.warning("No data found. Please click 'Refresh Market Discovery' or add valid tickers.")
@@ -1531,10 +1730,12 @@ with tab_futures:
     
     futures_data = []
     with st.spinner("Analyzing Futures market..."):
-        futures_data = get_futures_breakouts()
+        futures_data = _cached_futures_breakouts()
     
     if futures_data:
         futures_display = []
+        futures_export = []
+        show_ind = bool(st.session_state.get("show_indicators", True))
         try:
             auth_tok = st.session_state.get("auth_token")
         except Exception:
@@ -1546,18 +1747,49 @@ with tab_futures:
             else:
                 link = f"?chart={ticker_q}&popup=1"
             linked_name = f'<a href="{link}" target="_blank" rel="noopener noreferrer">{r["name"]}</a>'
-            futures_display.append({
+            score_max = int(r.get("score_max", 5))
+            score_val = int(r.get("score", 0))
+            disp = {
                 "Future Contract": linked_name,
                 "Ticker": r['ticker'],
                 "Last Price (RM)": f"{float(r['price']):.2f}",
-                "Breakout Score": f"{r['score']}/5",
+                "Breakout Score": f"{score_val}/{score_max}",
                 "RSI": r['rsi'],
-                "Momentum": "🚀 BULLISH" if r['score'] >= 4 else ("⚖️ SIDEWAYS" if r['score'] >= 2 else "📉 BEARISH"),
+                "Momentum": "🚀 BULLISH" if score_val >= 4 else ("⚖️ SIDEWAYS" if score_val >= 2 else "📉 BEARISH"),
                 "Technical View": r['analysis']
-            })
+            }
+            exp = {
+                "Ticker": str(r.get("ticker") or ""),
+                "Name": str(r.get("name") or ""),
+                "Last Price (RM)": float(r.get("price") or 0.0),
+                "Score": f"{score_val}/{score_max}",
+                "RSI": float(r.get("rsi") or 0.0),
+                "Technical View": str(r.get("analysis") or ""),
+            }
+            if show_ind:
+                disp["MACD Hist"] = _fmt_float(r.get("macd_hist"), 4)
+                disp["ATR% (14)"] = _fmt_pct(r.get("atr_pct"), 2)
+                disp["Vol/Avg20"] = _fmt_x(r.get("vol_ratio20"), 2)
+                exp["MACD Hist"] = None if r.get("macd_hist") is None else float(r.get("macd_hist"))
+                exp["ATR% (14)"] = None if r.get("atr_pct") is None else float(r.get("atr_pct"))
+                exp["Vol/Avg20"] = None if r.get("vol_ratio20") is None else float(r.get("vol_ratio20"))
+
+            futures_display.append(disp)
+            futures_export.append(exp)
         
         df_futures = pd.DataFrame(futures_display)
+        df_futures_export = pd.DataFrame(futures_export)
         st.caption("Tip: click the futures contract name to open its chart in a new window/tab.")
+        try:
+            st.download_button(
+                "Download Futures Table (CSV)",
+                data=df_futures_export.to_csv(index=False).encode("utf-8"),
+                file_name="futures_breakouts.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        except Exception:
+            pass
         st.markdown(df_futures.to_html(escape=False, index=False), unsafe_allow_html=True)
         
         # Add a note about futures

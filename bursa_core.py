@@ -1,36 +1,66 @@
-import os
-import pandas as pd
-import datetime
-import requests
-import re
+"""
+Bursa Malaysia breakout analyzer core utilities.
+
+This module is used by:
+  - Streamlit app (bursa_web_app.py)
+  - Desktop/Tkinter apps
+
+It provides:
+  - data fetch (yfinance)
+  - breakout models (v1/v2/v3)
+  - universe helpers (KLCI / FBM indices / custom file)
+  - RSS news + simple keyword-based trend inference
+"""
+
+from __future__ import annotations
+
 import csv
+import datetime as _dt
+import os
+import re
 import time
-import xml.etree.ElementTree as ET
 import zipfile
+import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from html import unescape
+from pathlib import Path
 from urllib.parse import quote_plus
 
-cache_path = os.path.join(os.getcwd(), ".yfinance_cache")
-if os.environ.get("STREAMLIT_SERVER_PORT") or not os.access(os.getcwd(), os.W_OK):
-    cache_path = "/tmp/.yfinance_cache"
-try:
-    os.makedirs(cache_path, exist_ok=True)
-except Exception:
-    pass
-os.environ["YFINANCE_CACHE_DIR"] = cache_path
-
+import pandas as pd
+import requests
 import yfinance as yf
 from ta.momentum import RSIIndicator
 from ta.trend import SMAIndicator
 
+
+# ----------------------------
+# yfinance caching (safe default)
+# ----------------------------
+_DEFAULT_CACHE_DIR = Path(os.getcwd()) / ".yfinance_cache"
 try:
-    yf.set_tz_cache_location(cache_path)
+    # Streamlit deployments or locked cwd often can't write; fall back to /tmp when needed.
+    if os.environ.get("STREAMLIT_SERVER_PORT") or not os.access(os.getcwd(), os.W_OK):
+        _DEFAULT_CACHE_DIR = Path(os.environ.get("TMPDIR") or os.environ.get("TEMP") or "/tmp") / ".yfinance_cache"
+except Exception:
+    _DEFAULT_CACHE_DIR = Path(os.environ.get("TMPDIR") or os.environ.get("TEMP") or "/tmp") / ".yfinance_cache"
+
+try:
+    _DEFAULT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 except Exception:
     pass
 
-# --- KNOWLEDGE BASE: LATEST MARKET INSIGHTS (MAY 2026) ---
-MARKET_INSIGHTS = {
+os.environ["YFINANCE_CACHE_DIR"] = str(_DEFAULT_CACHE_DIR)
+try:
+    yf.set_tz_cache_location(str(_DEFAULT_CACHE_DIR))
+except Exception:
+    pass
+
+
+# ----------------------------
+# Basic curated insights (used for labels / sector focus)
+# ----------------------------
+# NOTE: This is intentionally a small curated set; you can extend it freely.
+MARKET_INSIGHTS: dict[str, dict] = {
     "1155.KL": {"code": "1155", "name": "MAYBANK", "sector": "Banking", "analysis": "Strong defensive play with attractive dividends.", "catalyst": "High interest rate environment."},
     "1295.KL": {"code": "1295", "name": "PBBANK", "sector": "Banking", "analysis": "Strong asset quality and consistent dividends.", "catalyst": "Economic recovery proxy."},
     "1023.KL": {"code": "1023", "name": "CIMB", "sector": "Banking", "analysis": "Leading ASEAN focused bank. Strong earnings growth.", "catalyst": "Regional growth momentum."},
@@ -41,34 +71,1030 @@ MARKET_INSIGHTS = {
     "6888.KL": {"code": "6888", "name": "AXIATA", "sector": "Telecommunications", "analysis": "Regional footprint and digital assets expansion.", "catalyst": "TowerCo monetization."},
     "6012.KL": {"code": "6012", "name": "MAXIS", "sector": "Telecommunications", "analysis": "Strong mobile market share and 5G rollout.", "catalyst": "Enterprise digital transformation."},
     "5819.KL": {"code": "5819", "name": "HLBANK", "sector": "Banking", "analysis": "Excellent asset quality and cost management.", "catalyst": "Mortgage and SME loan growth."},
-    "8869.KL": {"code": "8869", "name": "PGENE", "sector": "Utilities", "analysis": "Stable earnings from power generation.", "catalyst": "New PPA agreements."},
     "6033.KL": {"code": "6033", "name": "PETGAS", "sector": "Utilities", "analysis": "Defensive play with high yields.", "catalyst": "Regulated asset base growth."},
     "3816.KL": {"code": "3816", "name": "MISC", "sector": "Transportation", "analysis": "Long-term charter contracts provide stability.", "catalyst": "Global energy demand."},
     "1066.KL": {"code": "1066", "name": "RHBBANK", "sector": "Banking", "analysis": "Attractive dividend yields and digital banking.", "catalyst": "Transformation program success."},
     "4707.KL": {"code": "4707", "name": "NESTLE", "sector": "Consumer", "analysis": "Resilient demand for essential products.", "catalyst": "Input cost normalization."},
     "1961.KL": {"code": "1961", "name": "IOICORP", "sector": "Plantation", "analysis": "Efficient producer with strong integrated operations.", "catalyst": "CPO price support."},
     "2445.KL": {"code": "2445", "name": "KLK", "sector": "Plantation", "analysis": "Leading plantation group with strong downstream.", "catalyst": "Upstream production growth."},
-    "4065.KL": {"code": "4065", "name": "PPB", "sector": "Consumer", "analysis": "Strong contribution from Wilmar and flour business.", "catalyst": "Food security themes."},
     "3182.KL": {"code": "3182", "name": "GENTING", "sector": "Tourism", "analysis": "Proxy for global travel recovery.", "catalyst": "Resorts World Las Vegas performance."},
     "4715.KL": {"code": "4715", "name": "GENM", "sector": "Tourism", "analysis": "Direct beneficiary of Visit Malaysia Year 2026.", "catalyst": "Increased tourist arrivals."},
     "7277.KL": {"code": "7277", "name": "DIALOG", "sector": "Oil & Gas", "analysis": "Strong recurring income from storage assets.", "catalyst": "Pengerang Phase 3 development."},
     "4197.KL": {"code": "4197", "name": "SIME", "sector": "Conglomerate", "analysis": "Strong automotive and heavy equipment division.", "catalyst": "EV market expansion."},
     "5285.KL": {"code": "5285", "name": "SIMEPLT", "sector": "Plantation", "analysis": "World's largest producer of certified sustainable CPO.", "catalyst": "ESG leadership and yield recovery."},
     "5681.KL": {"code": "5681", "name": "PETDAG", "sector": "Retail", "analysis": "Dominant market share in retail fuel.", "catalyst": "Domestic travel volume."},
-    "1015.KL": {"code": "1015", "name": "AMBANK", "sector": "Banking", "analysis": "Corporate banking strength and cost discipline.", "catalyst": "Asset quality improvement."},
-    "1082.KL": {"code": "1082", "name": "HLFG", "sector": "Banking", "analysis": "Undervalued financial holding company.", "catalyst": "Subsidiaries' strong performance."},
     "0166.KL": {"code": "0166", "name": "INARI", "sector": "Technology", "analysis": "Proxy for global 5G and AI smartphone cycle.", "catalyst": "New product launches by key customers."},
     "5296.KL": {"code": "5296", "name": "MRDIY", "sector": "Consumer", "analysis": "Aggressive store expansion and resilient demand.", "catalyst": "Inflationary environment beneficiary."},
     "5246.KL": {"code": "5246", "name": "WESTPORTS", "sector": "Transportation", "analysis": "Proxy for global trade recovery.", "catalyst": "Port expansion plans."},
     "4677.KL": {"code": "4677", "name": "YTL", "sector": "Conglomerate", "analysis": "Strong performance from utility and data center divisions.", "catalyst": "AI data center development."},
     "6742.KL": {"code": "6742", "name": "YTLPOWR", "sector": "Utilities", "analysis": "Power & utilities leader with data center-related growth exposure.", "catalyst": "Electricity demand growth and digital infrastructure theme."},
-    "7148.KL": {"code": "7148", "name": "DPHARMA", "sector": "Healthcare", "analysis": "Strong local pharmaceutical market share.", "catalyst": "Public healthcare spending."},
     "5099.KL": {"code": "5099", "name": "CAPITALA", "sector": "Aviation", "analysis": "Proxy for regional travel surge.", "catalyst": "AirAsia recovery and digital assets."},
-    "FKLI=F": {"code": "FKLI", "name": "KLCI FUTURES", "sector": "Futures", "analysis": "Proxy for the underlying FBM KLCI index. High correlation with banking and utility heavyweights.", "catalyst": "Market sentiment and index component performance."},
-    "FCPO=F": {"code": "FCPO", "name": "CPO FUTURES", "sector": "Futures", "analysis": "Global benchmark for Crude Palm Oil. Driven by edible oil supply/demand and biodiesel mandates.", "catalyst": "Indonesian export policies and weather patterns."},
-    "FM70=F": {"code": "FM70", "name": "MID 70 FUTURES", "sector": "Futures", "analysis": "Proxy for the FBM Mid 70 Index, representing mid-cap growth stocks.", "catalyst": "Domestic liquidity and mid-cap earnings momentum."}
+    "FKLI=F": {"code": "FKLI", "name": "KLCI FUTURES", "sector": "Futures", "analysis": "Proxy for the underlying FBM KLCI index.", "catalyst": "Market sentiment and index component performance."},
+    "FCPO=F": {"code": "FCPO", "name": "CPO FUTURES", "sector": "Futures", "analysis": "Global benchmark for Crude Palm Oil.", "catalyst": "Indonesian export policies and weather patterns."},
+    "FM70=F": {"code": "FM70", "name": "MID 70 FUTURES", "sector": "Futures", "analysis": "Proxy for the FBM Mid 70 Index.", "catalyst": "Domestic liquidity and mid-cap earnings momentum."},
 }
 
+
+# ----------------------------
+# Universe files / caches
+# ----------------------------
+APP_DIR = Path(__file__).resolve().parent
+BURSA_UNIVERSE_FILE = str(APP_DIR / "bursa_universe.csv")
+BURSA_UNIVERSE_AUTO_FILE = str(APP_DIR / "bursa_universe_auto.csv")
+INDEX_COMPONENTS_CACHE_DIR = APP_DIR / "index_components_cache"
+KLCI_COMPONENTS_FILE = APP_DIR / "klci_components_auto.txt"
+
+# A small "curated" scanning universe (fast).
+STOCK_DISCOVERY_UNIVERSE = [t for t in MARKET_INSIGHTS.keys() if t.endswith(".KL")]
+KLCI_COMPONENTS = set()  # filled lazily by get_stock_universe()
+
+
+def _is_today_kl(ts) -> bool:
+    try:
+        t = pd.Timestamp(ts)
+        if t.tz is None:
+            t = t.tz_localize("Asia/Kuala_Lumpur")
+        else:
+            t = t.tz_convert("Asia/Kuala_Lumpur")
+        return t.normalize() == pd.Timestamp.now(tz="Asia/Kuala_Lumpur").normalize()
+    except Exception:
+        return False
+
+
+def _load_list_file(path: Path) -> list[str]:
+    try:
+        if not path.exists():
+            return []
+        txt = path.read_text(encoding="utf-8", errors="ignore")
+        out = []
+        for line in txt.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            if s.startswith("#"):
+                continue
+            s = s.replace(",", " ").replace("\t", " ")
+            s = s.split()[0]
+            s = s.upper()
+            if s.isdigit() and len(s) == 4:
+                s = f"{s}.KL"
+            if s.endswith(".KL") or s.endswith("=F") or s.startswith("^"):
+                out.append(s)
+        # de-dupe, preserve order
+        seen = set()
+        uniq = []
+        for x in out:
+            if x in seen:
+                continue
+            seen.add(x)
+            uniq.append(x)
+        return uniq
+    except Exception:
+        return []
+
+
+def _load_universe_from_csv(path: str) -> list[str]:
+    p = Path(path)
+    if not p.exists():
+        return []
+    out: list[str] = []
+    try:
+        with p.open("r", encoding="utf-8", errors="ignore", newline="") as f:
+            for row in csv.reader(f):
+                if not row:
+                    continue
+                s = str(row[0]).strip().upper()
+                if not s or s.startswith("#"):
+                    continue
+                if s.isdigit() and len(s) == 4:
+                    s = f"{s}.KL"
+                if s.endswith(".KL"):
+                    out.append(s)
+    except Exception:
+        return []
+    seen = set()
+    uniq = []
+    for x in out:
+        if x in seen:
+            continue
+        seen.add(x)
+        uniq.append(x)
+    return uniq
+
+
+def get_stock_universe(mode: str = "curated") -> tuple[list[str], str]:
+    """
+    Returns (tickers, source_label).
+    Supported modes match the Streamlit UI.
+    """
+    m = str(mode or "curated").strip().lower()
+
+    # cached constituent lists
+    if m in {"klci", "kcli"}:
+        u = _load_list_file(KLCI_COMPONENTS_FILE)
+        if u:
+            global KLCI_COMPONENTS
+            KLCI_COMPONENTS = set(u)
+            return u, "klci-file"
+        return list(STOCK_DISCOVERY_UNIVERSE), "klci-fallback"
+
+    if m in {"fbm70", "mid70"}:
+        u = _load_list_file(INDEX_COMPONENTS_CACHE_DIR / "fbm70.txt")
+        return (u, "fbm70-cache") if u else (list(STOCK_DISCOVERY_UNIVERSE), "fbm70-fallback")
+
+    if m in {"fbm100", "top100"}:
+        u = _load_list_file(INDEX_COMPONENTS_CACHE_DIR / "fbm100.txt")
+        return (u, "fbm100-cache") if u else (list(STOCK_DISCOVERY_UNIVERSE), "fbm100-fallback")
+
+    if m in {"smallcap", "small", "sc"}:
+        u = _load_list_file(INDEX_COMPONENTS_CACHE_DIR / "smallcap.txt")
+        return (u, "smallcap-cache") if u else (list(STOCK_DISCOVERY_UNIVERSE), "smallcap-fallback")
+
+    if m in {"file", "full", "all"}:
+        u = _load_universe_from_csv(BURSA_UNIVERSE_FILE)
+        return (u, "file") if u else (list(STOCK_DISCOVERY_UNIVERSE), "file-fallback")
+
+    if m in {"auto", "malaysia", "my"}:
+        u = _load_universe_from_csv(BURSA_UNIVERSE_AUTO_FILE)
+        if u:
+            return u, "auto-file"
+        u = _load_universe_from_csv(BURSA_UNIVERSE_FILE)
+        return (u, "auto-fallback-file") if u else (list(STOCK_DISCOVERY_UNIVERSE), "auto-fallback-curated")
+
+    # simple sector filters from curated insights (fast)
+    if m.startswith("sector-"):
+        sector_key = m.replace("sector-", "").strip().lower()
+        sector_map = {
+            "tech": {"technology"},
+            "utilities": {"utilities"},
+            "infra": {"infrastructure"},
+            "property": {"property"},
+            "consumer": {"consumer"},
+            "banks": {"banking", "financial"},
+            "healthcare": {"healthcare"},
+            "energy": {"energy", "oil & gas"},
+            "plantation": {"plantation"},
+            "telco": {"telecommunications", "telco"},
+            "industrial": {"industrials"},
+        }
+        allow = sector_map.get(sector_key, set())
+        u = []
+        for t, v in MARKET_INSIGHTS.items():
+            if not str(t).endswith(".KL"):
+                continue
+            sec = str(v.get("sector") or "").strip().lower()
+            if allow and sec in allow:
+                u.append(str(t).upper())
+        return (u, f"{m}-curated") if u else (list(STOCK_DISCOVERY_UNIVERSE), f"{m}-fallback")
+
+    # "focus" is a slightly larger curated list; currently same as curated.
+    if m in {"focus", "curated"}:
+        return list(STOCK_DISCOVERY_UNIVERSE), "curated"
+
+    return list(STOCK_DISCOVERY_UNIVERSE), "curated"
+
+
+# ----------------------------
+# Insight resolution
+# ----------------------------
+def _resolve_insight(ticker: str, resolved_name: str | None) -> tuple[str, str, str, str]:
+    t = str(ticker).upper().strip()
+    code = t.split(".")[0]
+    analysis = "Technical breakout analysis based on live data."
+    catalyst = "Market momentum / Trend following."
+
+    insight = MARKET_INSIGHTS.get(t)
+    if not insight:
+        for _, v in MARKET_INSIGHTS.items():
+            if str(v.get("code") or "").strip() == code:
+                insight = v
+                break
+
+    if insight:
+        name = str(insight.get("name") or code)
+        analysis = str(insight.get("analysis") or analysis)
+        catalyst = str(insight.get("catalyst") or catalyst)
+        code = str(insight.get("code") or code)
+    else:
+        name = (resolved_name or code) if resolved_name else code
+    name = str(name).replace(".KL", "").strip()
+    return code, name, analysis, catalyst
+
+
+def _resolve_insight_v3(ticker: str, resolved_name: str | None) -> tuple[str, str, str, str, str]:
+    t = str(ticker).upper().strip()
+    code = t.split(".")[0]
+    name = resolved_name or code
+    analysis = "Technical breakout analysis based on live data."
+    catalyst = "Market momentum / Trend following."
+    sector = "Unknown"
+
+    insight = MARKET_INSIGHTS.get(t)
+    if not insight:
+        for _, v in MARKET_INSIGHTS.items():
+            if str(v.get("code") or "").strip() == code:
+                insight = v
+                break
+
+    if insight:
+        name = str(insight.get("name") or name)
+        analysis = str(insight.get("analysis") or analysis)
+        catalyst = str(insight.get("catalyst") or catalyst)
+        sector = str(insight.get("sector") or sector).strip() or sector
+        code = str(insight.get("code") or code)
+
+    name = str(name).replace(".KL", "").strip()
+    if name.strip() == code:
+        name = code
+    return code, name, sector, analysis, catalyst
+
+
+# ----------------------------
+# Extra indicators (MACD/ATR/Volume ratio)
+# ----------------------------
+def _calc_extra_indicators(df: pd.DataFrame) -> dict:
+    if df is None or df.empty:
+        return {"macd": None, "macd_signal": None, "macd_hist": None, "atr14": None, "atr_pct": None, "vol_ratio20": None}
+
+    try:
+        close = pd.to_numeric(df.get("Close"), errors="coerce")
+        high = pd.to_numeric(df.get("High"), errors="coerce")
+        low = pd.to_numeric(df.get("Low"), errors="coerce")
+        vol = pd.to_numeric(df.get("Volume"), errors="coerce")
+    except Exception:
+        return {"macd": None, "macd_signal": None, "macd_hist": None, "atr14": None, "atr_pct": None, "vol_ratio20": None}
+
+    out = {"macd": None, "macd_signal": None, "macd_hist": None, "atr14": None, "atr_pct": None, "vol_ratio20": None}
+
+    try:
+        if close.notna().sum() >= 30:
+            ema12 = close.ewm(span=12, adjust=False).mean()
+            ema26 = close.ewm(span=26, adjust=False).mean()
+            macd = ema12 - ema26
+            sig = macd.ewm(span=9, adjust=False).mean()
+            hist = macd - sig
+            out["macd"] = float(macd.iloc[-1]) if pd.notna(macd.iloc[-1]) else None
+            out["macd_signal"] = float(sig.iloc[-1]) if pd.notna(sig.iloc[-1]) else None
+            out["macd_hist"] = float(hist.iloc[-1]) if pd.notna(hist.iloc[-1]) else None
+    except Exception:
+        pass
+
+    try:
+        if close.notna().sum() >= 30 and high.notna().sum() >= 30 and low.notna().sum() >= 30:
+            prev_close = close.shift(1)
+            tr = pd.concat([(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+            atr14 = tr.rolling(window=14).mean()
+            atr_pct = atr14 / close
+            out["atr14"] = float(atr14.iloc[-1]) if pd.notna(atr14.iloc[-1]) else None
+            out["atr_pct"] = float(atr_pct.iloc[-1]) if pd.notna(atr_pct.iloc[-1]) else None
+    except Exception:
+        pass
+
+    try:
+        if vol.notna().sum() >= 25:
+            v_last = float(vol.iloc[-1]) if pd.notna(vol.iloc[-1]) else None
+            v_avg20 = float(vol.rolling(window=20).mean().iloc[-1]) if pd.notna(vol.rolling(window=20).mean().iloc[-1]) else None
+            if v_last is not None and v_avg20 and v_avg20 > 0:
+                out["vol_ratio20"] = float(v_last / v_avg20)
+    except Exception:
+        pass
+
+    return out
+
+
+# ----------------------------
+# Data fetch
+# ----------------------------
+def get_stock_data(ticker: str, period: str = "1y") -> tuple[pd.DataFrame | None, str | None]:
+    """
+    Returns (df, resolved_name).
+    """
+    t = str(ticker).upper().strip()
+    if not t:
+        return None, None
+
+    try:
+        tk = yf.Ticker(t)
+        df = tk.history(period=str(period))
+    except Exception:
+        return None, None
+
+    if df is None or df.empty:
+        return None, None
+
+    # Some environments return tz-aware index; keep it, but ensure clean numeric OHLCV.
+    df = df.copy()
+    for c in ["Open", "High", "Low", "Close", "Volume"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    try:
+        df = df.dropna(subset=["Close"])
+    except Exception:
+        pass
+
+    # Drop trailing "bad" bar if necessary.
+    try:
+        if len(df) >= 2:
+            last_close = df["Close"].iloc[-1]
+            last_open = df["Open"].iloc[-1] if "Open" in df.columns else None
+            if pd.isna(last_close) or (last_open is not None and pd.isna(last_open)):
+                df = df.iloc[:-1]
+            elif "Volume" in df.columns and float(df["Volume"].iloc[-1] or 0) == 0.0 and float(df["Volume"].iloc[-2] or 0) > 0.0 and not _is_today_kl(df.index[-1]):
+                df = df.iloc[:-1]
+    except Exception:
+        pass
+
+    name = None
+    try:
+        info = getattr(tk, "info", None) or {}
+        name = info.get("shortName") or info.get("longName") or info.get("displayName")
+    except Exception:
+        name = None
+
+    return df, (str(name).strip() if name else None)
+
+
+# ----------------------------
+# Breakout models
+# ----------------------------
+def analyze_breakout(ticker, df, resolved_name=None, min_rows: int = 50):
+    """
+    Original (V1) breakout model. Score range: 0-5.
+    """
+    if df is None or len(df) < int(min_rows):
+        return None
+
+    ticker = str(ticker).upper().strip()
+    current_price = float(df["Close"].iloc[-1])
+
+    rsi = 50.0
+    score = 1
+    is_volume_surge = False
+    breakout_level = None
+    try:
+        sma_20 = float(SMAIndicator(df["Close"], window=20).sma_indicator().iloc[-1])
+        sma_50 = float(SMAIndicator(df["Close"], window=50).sma_indicator().iloc[-1])
+        rsi_v = RSIIndicator(df["Close"], window=14).rsi().iloc[-1]
+        if rsi_v == rsi_v:
+            rsi = float(rsi_v)
+        avg_volume_20 = float(df["Volume"].rolling(window=20).mean().iloc[-1]) if "Volume" in df.columns else 0.0
+        current_volume = float(df["Volume"].iloc[-1]) if "Volume" in df.columns else 0.0
+        is_above_sma = current_price > sma_20 and current_price > sma_50
+        is_volume_surge = (avg_volume_20 > 0 and current_volume > (avg_volume_20 * 1.5))
+        breakout_level = float(df["Close"].iloc[-20:-1].max())
+        is_price_break = current_price > breakout_level
+        score = 0
+        if is_above_sma:
+            score += 1
+        if is_volume_surge:
+            score += 2
+        if is_price_break:
+            score += 2
+    except Exception:
+        pass
+
+    code, name, analysis, catalyst = _resolve_insight(ticker, resolved_name)
+    extra = _calc_extra_indicators(df)
+
+    return {
+        "ticker": ticker,
+        "code": code,
+        "name": name,
+        "price": float(round(current_price, 3)),
+        "rsi": float(round(rsi, 2)),
+        "volume_surge": bool(is_volume_surge),
+        "score": int(score),
+        "score_max": 5,
+        "analysis": analysis,
+        "catalyst": catalyst,
+        "breakout_level": breakout_level,
+        **extra,
+        "model": "v1",
+    }
+
+
+def analyze_breakout_v2(ticker, df, resolved_name=None, benchmark_df=None, min_rows: int = 120):
+    """
+    Stronger (V2) breakout model. Score range: 0-10.
+    """
+    if df is None or len(df) < int(min_rows):
+        return None
+
+    ticker = str(ticker).upper().strip()
+    df = df.copy()
+    for c in ["Open", "High", "Low", "Close", "Volume"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    try:
+        current_close = float(df["Close"].iloc[-1])
+        if not (current_close > 0.0):
+            return None
+    except Exception:
+        return None
+
+    rsi = 50.0
+    try:
+        rsi_v = RSIIndicator(df["Close"], window=14).rsi().iloc[-1]
+        if rsi_v == rsi_v:
+            rsi = float(rsi_v)
+    except Exception:
+        pass
+
+    sma50 = sma200 = None
+    try:
+        sma50 = float(SMAIndicator(df["Close"], window=50).sma_indicator().iloc[-1])
+        if len(df) >= 220:
+            sma200 = float(SMAIndicator(df["Close"], window=200).sma_indicator().iloc[-1])
+    except Exception:
+        pass
+
+    score = 0
+    score_max = 10
+
+    # Trend strength
+    try:
+        if sma50 is not None and current_close > sma50:
+            sma50_prev = float(SMAIndicator(df["Close"], window=50).sma_indicator().iloc[-6])
+            if sma50_prev == sma50_prev and sma50 > sma50_prev:
+                score += 2
+    except Exception:
+        pass
+
+    try:
+        if sma200 is not None and current_close > sma200:
+            sma200_prev = float(SMAIndicator(df["Close"], window=200).sma_indicator().iloc[-6])
+            if sma200_prev == sma200_prev and sma200 > sma200_prev:
+                score += 2
+    except Exception:
+        pass
+
+    # 55d breakout
+    breakout_lookback = 55
+    breakout_55 = False
+    breakout_level = None
+    try:
+        if len(df) >= breakout_lookback + 5:
+            breakout_level = float(df["Close"].iloc[-breakout_lookback:-1].max())
+            if current_close > breakout_level:
+                breakout_55 = True
+                score += 2
+    except Exception:
+        pass
+
+    # Close strength
+    try:
+        o = float(df["Open"].iloc[-1])
+        h = float(df["High"].iloc[-1])
+        l = float(df["Low"].iloc[-1])
+        if h > l:
+            close_pos = (current_close - l) / (h - l)
+            if close_pos >= 0.7:
+                score += 1
+    except Exception:
+        pass
+
+    # Volume + liquidity
+    try:
+        if "Volume" in df.columns and len(df) >= 30:
+            current_vol = float(df["Volume"].iloc[-1])
+            avg_vol20 = float(df["Volume"].rolling(window=20).mean().iloc[-1])
+            if avg_vol20 > 0 and current_vol >= avg_vol20 * 1.8:
+                score += 1
+            traded_value20 = float((df["Close"] * df["Volume"]).rolling(window=20).mean().iloc[-1])
+            if traded_value20 >= 1_000_000:
+                score += 1
+    except Exception:
+        pass
+
+    # Relative strength vs benchmark over ~3 months
+    rs_3m = None
+    try:
+        if benchmark_df is not None and not benchmark_df.empty and "Close" in benchmark_df.columns:
+            join = pd.concat([df["Close"], benchmark_df["Close"]], axis=1, join="inner").dropna()
+            if len(join) >= 70:
+                s_now, s_prev = float(join.iloc[-1, 0]), float(join.iloc[-64, 0])
+                b_now, b_prev = float(join.iloc[-1, 1]), float(join.iloc[-64, 1])
+                if s_prev > 0 and b_prev > 0:
+                    rs_3m = (s_now / s_prev) - (b_now / b_prev)
+                    if rs_3m > 0:
+                        score += 1
+    except Exception:
+        pass
+
+    # ATR contraction
+    atr_contraction = False
+    try:
+        if len(df) >= 40:
+            prev_close = df["Close"].shift(1)
+            tr = pd.concat([(df["High"] - df["Low"]).abs(), (df["High"] - prev_close).abs(), (df["Low"] - prev_close).abs()], axis=1).max(axis=1)
+            atr14 = tr.rolling(window=14).mean()
+            atr_pct = atr14 / df["Close"]
+            recent = float(pd.to_numeric(atr_pct.tail(5), errors="coerce").dropna().mean())
+            prior = float(pd.to_numeric(atr_pct.iloc[-25:-5], errors="coerce").dropna().mean())
+            if prior > 0 and recent > 0 and recent <= prior * 0.8:
+                atr_contraction = True
+                score += 1
+    except Exception:
+        pass
+
+    code, name, analysis, catalyst = _resolve_insight(ticker, resolved_name)
+    extra = _calc_extra_indicators(df)
+
+    return {
+        "ticker": ticker,
+        "code": code,
+        "name": name,
+        "price": float(round(current_close, 3)),
+        "rsi": float(round(rsi, 2)),
+        "score": int(score),
+        "score_max": int(score_max),
+        "analysis": analysis,
+        "catalyst": catalyst,
+        "breakout_55": bool(breakout_55),
+        "breakout_level": breakout_level,
+        "rs_3m": None if rs_3m is None else float(rs_3m),
+        "atr_contraction": bool(atr_contraction),
+        **extra,
+        "model": "v2",
+    }
+
+
+def analyze_breakout_v3(
+    ticker,
+    df,
+    resolved_name=None,
+    benchmark_df=None,
+    min_rows: int = 120,
+    signal_lookback: int = 5,
+    max_runup_pct=None,
+    max_pullback_pct=None,
+    retest_days: int = 0,
+    breakout_buffer_pct: float | None = None,
+    volume_spike_mult: float | None = None,
+    power_close_pos_min: float | None = None,
+    power_body_pct_min: float | None = None,
+    min_traded_value20: float | None = None,
+    require_rs_positive: bool = False,
+    require_atr_contraction: bool = False,
+    require_benchmark_trend: bool = False,
+):
+    """
+    Breakout candle (V3) model. Score range: 0-11.
+    Adds a "breakout candle" bonus when:
+      - 55d breakout (with optional buffer)
+      - bullish power candle
+      - volume spike
+    Also supports optional retest confirmation logic.
+    """
+    if df is None or len(df) < int(min_rows):
+        return None
+
+    ticker = str(ticker).upper().strip()
+    df = df.copy()
+    for c in ["Open", "High", "Low", "Close", "Volume"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    try:
+        current_close = float(df["Close"].iloc[-1])
+        if not (current_close > 0.0):
+            return None
+    except Exception:
+        return None
+
+    rsi = 50.0
+    try:
+        rsi_v = RSIIndicator(df["Close"], window=14).rsi().iloc[-1]
+        if rsi_v == rsi_v:
+            rsi = float(rsi_v)
+    except Exception:
+        pass
+
+    sma50 = sma200 = None
+    try:
+        sma50 = float(SMAIndicator(df["Close"], window=50).sma_indicator().iloc[-1])
+        if len(df) >= 220:
+            sma200 = float(SMAIndicator(df["Close"], window=200).sma_indicator().iloc[-1])
+    except Exception:
+        pass
+
+    score = 0
+    score_max = 11
+
+    # Trend strength
+    try:
+        if sma50 is not None and current_close > sma50:
+            sma50_prev = float(SMAIndicator(df["Close"], window=50).sma_indicator().iloc[-6])
+            if sma50_prev == sma50_prev and sma50 > sma50_prev:
+                score += 2
+    except Exception:
+        pass
+
+    try:
+        if sma200 is not None and current_close > sma200:
+            sma200_prev = float(SMAIndicator(df["Close"], window=200).sma_indicator().iloc[-6])
+            if sma200_prev == sma200_prev and sma200 > sma200_prev:
+                score += 2
+    except Exception:
+        pass
+
+    # Liquidity
+    liquidity_ok = False
+    try:
+        min_tv = 1_000_000.0 if min_traded_value20 is None else float(min_traded_value20)
+        traded_value20 = float((df["Close"] * df["Volume"]).rolling(window=20).mean().shift(1).iloc[-1])
+        if traded_value20 >= float(min_tv):
+            liquidity_ok = True
+            score += 1
+    except Exception:
+        pass
+
+    # Relative strength (optional gate)
+    rs_3m = None
+    try:
+        if benchmark_df is not None and not benchmark_df.empty and "Close" in benchmark_df.columns:
+            join = pd.concat([df["Close"], benchmark_df["Close"]], axis=1, join="inner").dropna()
+            if len(join) >= 70:
+                s_now, s_prev = float(join.iloc[-1, 0]), float(join.iloc[-64, 0])
+                b_now, b_prev = float(join.iloc[-1, 1]), float(join.iloc[-64, 1])
+                if s_prev > 0 and b_prev > 0:
+                    rs_3m = (s_now / s_prev) - (b_now / b_prev)
+                    if rs_3m > 0:
+                        score += 1
+    except Exception:
+        pass
+    if require_rs_positive and rs_3m is not None and rs_3m <= 0:
+        return None
+
+    # ATR contraction (optional gate)
+    atr_contraction = False
+    try:
+        prev_close = df["Close"].shift(1)
+        tr = pd.concat([(df["High"] - df["Low"]).abs(), (df["High"] - prev_close).abs(), (df["Low"] - prev_close).abs()], axis=1).max(axis=1)
+        atr14 = tr.rolling(window=14).mean()
+        atr_pct = atr14 / df["Close"]
+        recent = float(pd.to_numeric(atr_pct.tail(5), errors="coerce").dropna().mean())
+        prior = float(pd.to_numeric(atr_pct.iloc[-25:-5], errors="coerce").dropna().mean())
+        if prior > 0 and recent > 0 and recent <= prior * 0.8:
+            atr_contraction = True
+            score += 1
+    except Exception:
+        pass
+    if require_atr_contraction and not atr_contraction:
+        return None
+
+    # Benchmark trend (optional gate) - simple: KLSE above SMA50 and rising
+    bench_trend_ok = None
+    try:
+        if benchmark_df is not None and not benchmark_df.empty and "Close" in benchmark_df.columns and len(benchmark_df) >= 60:
+            b = pd.to_numeric(benchmark_df["Close"], errors="coerce").dropna()
+            sma_b = b.rolling(50).mean()
+            bench_trend_ok = bool(b.iloc[-1] > sma_b.iloc[-1] and sma_b.iloc[-1] > sma_b.iloc[-6])
+    except Exception:
+        bench_trend_ok = None
+    if require_benchmark_trend and bench_trend_ok is False:
+        return None
+
+    # Breakout candle logic
+    try:
+        lookback_days = int(signal_lookback)
+    except Exception:
+        lookback_days = 5
+    lookback_days = max(1, min(20, lookback_days))
+
+    buf_pct = 0.0 if breakout_buffer_pct is None else float(breakout_buffer_pct)
+    buf_pct = max(0.0, buf_pct)
+    vol_mult = 1.8 if volume_spike_mult is None else float(volume_spike_mult)
+    vol_mult = max(1.0, vol_mult)
+    close_pos_min = 0.7 if power_close_pos_min is None else float(power_close_pos_min)
+    close_pos_min = max(0.0, min(1.0, close_pos_min))
+    body_pct_min = 0.55 if power_body_pct_min is None else float(power_body_pct_min)
+    body_pct_min = max(0.0, min(1.0, body_pct_min))
+
+    breakout_lookback = 55
+    breakout_55 = False
+    breakout_candle = False
+    breakout_candle_valid = False
+    breakout_hold_ok = False
+    power_candle = False
+    volume_spike = False
+    breakout_candle_ts = None
+    breakout_candle_vol = None
+    breakout_candle_close = None
+
+    # find breakout candle within lookback window (most recent wins)
+    try:
+        if len(df) >= breakout_lookback + 5 and "Volume" in df.columns:
+            prior_high_series = df["Close"].rolling(window=breakout_lookback).max().shift(1)
+            avg_vol20 = df["Volume"].rolling(window=20).mean().shift(1)
+            start_i = max(1, len(df) - lookback_days)
+            for i in range(len(df) - 1, start_i - 1, -1):
+                ph = float(prior_high_series.iloc[i])
+                if not (ph > 0.0):
+                    continue
+                thr = ph * (1.0 + (buf_pct / 100.0))
+                c = float(df["Close"].iloc[i])
+                o = float(df["Open"].iloc[i])
+                h = float(df["High"].iloc[i])
+                l = float(df["Low"].iloc[i])
+                v = float(df["Volume"].iloc[i])
+                avg_v = float(avg_vol20.iloc[i]) if pd.notna(avg_vol20.iloc[i]) else 0.0
+                if c > thr:
+                    breakout_55 = True
+                    # power candle
+                    if h > l:
+                        close_pos = (c - l) / (h - l)
+                    else:
+                        close_pos = 0.0
+                    body = abs(c - o)
+                    rng = max(1e-9, h - l)
+                    body_pct = body / rng
+                    power_candle = (c > o) and (close_pos >= close_pos_min) and (body_pct >= body_pct_min)
+                    volume_spike = (avg_v > 0 and v >= avg_v * vol_mult)
+                    breakout_candle = True
+                    breakout_candle_ts = df.index[i]
+                    breakout_candle_close = c
+                    breakout_candle_vol = v
+                    breakout_candle_valid = bool(power_candle and volume_spike)
+                    # hold check: today's close above breakout candle low
+                    try:
+                        today_low = float(df["Low"].iloc[-1])
+                        breakout_hold_ok = bool(float(df["Close"].iloc[-1]) >= today_low)
+                    except Exception:
+                        breakout_hold_ok = False
+                    break
+    except Exception:
+        pass
+
+    if breakout_candle_valid:
+        score += 2  # breakout candle bonus
+
+    # retest confirm (optional): within N days, touch breakout level and close above it
+    retest_confirmed = False
+    retest_touch_date = ""
+    try:
+        rd = int(retest_days) if retest_days is not None else 0
+    except Exception:
+        rd = 0
+    rd = max(0, min(20, rd))
+    if rd > 0 and breakout_candle_ts is not None:
+        try:
+            idx = df.index
+            i0 = list(idx).index(breakout_candle_ts)
+            end = min(len(df) - 1, i0 + rd)
+            # breakout level approximate: prior 55d high at candle time
+            prior_high = float(df["Close"].iloc[i0 - breakout_lookback:i0].max())
+            ceiling = prior_high * 1.01
+            hold = prior_high * 0.995
+            for j in range(i0 + 1, end + 1):
+                low_j = float(df["Low"].iloc[j])
+                close_j = float(df["Close"].iloc[j])
+                if low_j <= ceiling and close_j >= hold:
+                    retest_confirmed = True
+                    retest_touch_date = pd.Timestamp(idx[j]).date().isoformat()
+                    break
+        except Exception:
+            retest_confirmed = False
+
+    # run-up and pullback (used by UI filters)
+    breakout_level = None
+    runup_pct = None
+    distance_to_breakout_pct = None
+    near_breakout = False
+    try:
+        prior_high = float(df["Close"].iloc[-breakout_lookback:-1].max())
+        breakout_level = prior_high * (1.0 + (buf_pct / 100.0))
+        if breakout_level and breakout_level > 0:
+            distance_to_breakout_pct = ((current_close / breakout_level) - 1.0) * 100.0
+            if (not breakout_candle_valid) and (not retest_confirmed) and (distance_to_breakout_pct is not None):
+                if float(distance_to_breakout_pct) < 0.0 and float(distance_to_breakout_pct) >= -1.0:
+                    near_breakout = True
+        if breakout_candle_close and breakout_level and breakout_level > 0:
+            runup_pct = ((breakout_candle_close / breakout_level) - 1.0) * 100.0
+    except Exception:
+        pass
+
+    max_runup_val = None
+    max_pullback_val = None
+    try:
+        max_runup_val = None if max_runup_pct is None else float(max_runup_pct)
+    except Exception:
+        max_runup_val = None
+    try:
+        max_pullback_val = None if max_pullback_pct is None else float(max_pullback_pct)
+    except Exception:
+        max_pullback_val = None
+
+    breakout_candle_date = ""
+    breakout_candle_age = None
+    if breakout_candle_ts is not None:
+        try:
+            d = pd.Timestamp(breakout_candle_ts).date()
+            breakout_candle_date = d.isoformat()
+            today = pd.Timestamp.now(tz="Asia/Kuala_Lumpur").date()
+            breakout_candle_age = int((today - d).days)
+        except Exception:
+            breakout_candle_date = ""
+            breakout_candle_age = None
+
+    code, name, sector, analysis, catalyst = _resolve_insight_v3(ticker, resolved_name)
+    extra = _calc_extra_indicators(df)
+
+    return {
+        "ticker": ticker,
+        "code": code,
+        "name": name,
+        "sector": sector,
+        "price": float(round(current_close, 3)),
+        "rsi": float(round(rsi, 2)),
+        "score": int(score),
+        "score_max": int(score_max),
+        "analysis": analysis,
+        "catalyst": catalyst,
+        "rs_3m": None if rs_3m is None else float(rs_3m),
+        "atr_contraction": bool(atr_contraction),
+        "bench_trend_ok": None if bench_trend_ok is None else bool(bench_trend_ok),
+        "breakout_55": bool(breakout_55),
+        "power_candle": bool(power_candle),
+        "volume_spike": bool(volume_spike),
+        "liquidity_ok": bool(liquidity_ok),
+        "breakout_candle": bool(breakout_candle),
+        "breakout_candle_valid": bool(breakout_candle_valid),
+        "breakout_hold_ok": bool(breakout_hold_ok),
+        "breakout_candle_date": breakout_candle_date,
+        "breakout_candle_age": breakout_candle_age,
+        "signal_lookback": int(lookback_days),
+        "breakout_candle_close": None if breakout_candle_close is None else float(breakout_candle_close),
+        "breakout_candle_vol": None if breakout_candle_vol is None else float(breakout_candle_vol),
+        "runup_pct": None if runup_pct is None else float(runup_pct),
+        "max_runup_pct": None if max_runup_val is None else float(max_runup_val),
+        "max_pullback_pct": None if max_pullback_val is None else float(max_pullback_val),
+        "retest_days": int(rd),
+        "retest_confirmed": bool(retest_confirmed),
+        "retest_touch_date": retest_touch_date,
+        "breakout_level": None if breakout_level is None else float(breakout_level),
+        "distance_to_breakout_pct": None if distance_to_breakout_pct is None else float(distance_to_breakout_pct),
+        "near_breakout": bool(near_breakout),
+        **extra,
+        "model": "v3",
+    }
+
+
+# ----------------------------
+# Scanners
+# ----------------------------
+FUTURES_COMPONENTS = ["FKLI=F", "FCPO=F", "FM70=F"]
+
+
+def get_futures_breakouts() -> list[dict]:
+    results: list[dict] = []
+    for ticker in FUTURES_COMPONENTS:
+        df, name = get_stock_data(ticker, period="2y")
+        if df is None or df.empty:
+            continue
+        min_r = 30 if len(df) >= 30 else len(df)
+        r = analyze_breakout(ticker, df, name, min_rows=min_r)
+        if r:
+            results.append(r)
+    return results
+
+
+def get_top_breakouts(
+    limit: int = 10,
+    model: str = "v2",
+    universe_mode: str = "curated",
+    universe: list[str] | None = None,
+    sector_allowlist=None,
+    signal_lookback: int = 5,
+    max_runup_pct=None,
+    max_pullback_pct=None,
+    retest_days: int = 0,
+    max_tickers=None,
+    breakout_buffer_pct: float | None = None,
+    volume_spike_mult: float | None = None,
+    power_close_pos_min: float | None = None,
+    power_body_pct_min: float | None = None,
+    min_traded_value20: float | None = None,
+    require_rs_positive: bool = False,
+    require_atr_contraction: bool = False,
+    require_benchmark_trend: bool = False,
+) -> list[dict]:
+    m = str(model or "v2").lower().strip()
+    tickers = list(universe) if universe is not None else list(get_stock_universe(universe_mode)[0])
+    try:
+        if max_tickers is not None:
+            n = int(max_tickers)
+            if n > 0:
+                tickers = tickers[:n]
+    except Exception:
+        pass
+
+    allow = None
+    if m == "v3" and sector_allowlist:
+        allow = {str(x).strip().lower() for x in sector_allowlist if str(x).strip()}
+
+    benchmark_df = None
+    if m in {"v2", "v3"}:
+        try:
+            benchmark_df, _ = get_stock_data("^KLSE", period="1y")
+        except Exception:
+            benchmark_df = None
+
+    all_results: list[dict] = []
+    for ticker in tickers:
+        t = str(ticker).upper().strip()
+        if not t:
+            continue
+        if allow:
+            try:
+                _, _, sec, *_ = _resolve_insight_v3(t, None)
+                if sec and str(sec).strip().lower() not in allow:
+                    continue
+            except Exception:
+                pass
+
+        df, resolved_name = get_stock_data(t, period="1y")
+        if df is None or df.empty:
+            continue
+
+        if m == "v3":
+            res = analyze_breakout_v3(
+                t,
+                df,
+                resolved_name,
+                benchmark_df=benchmark_df,
+                min_rows=120,
+                signal_lookback=signal_lookback,
+                max_runup_pct=max_runup_pct,
+                max_pullback_pct=max_pullback_pct,
+                retest_days=retest_days,
+                breakout_buffer_pct=breakout_buffer_pct,
+                volume_spike_mult=volume_spike_mult,
+                power_close_pos_min=power_close_pos_min,
+                power_body_pct_min=power_body_pct_min,
+                min_traded_value20=min_traded_value20,
+                require_rs_positive=bool(require_rs_positive),
+                require_atr_contraction=bool(require_atr_contraction),
+                require_benchmark_trend=bool(require_benchmark_trend),
+            )
+        elif m == "v2":
+            res = analyze_breakout_v2(t, df, resolved_name, benchmark_df=benchmark_df, min_rows=120)
+        else:
+            res = analyze_breakout(t, df, resolved_name)
+        if res:
+            all_results.append(res)
+
+    if m == "v3":
+        all_results.sort(
+            key=lambda x: (
+                bool(x.get("retest_confirmed")),
+                bool(x.get("breakout_candle_valid")),
+                int(x.get("score", 0)),
+                -float(x.get("rsi", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
+    else:
+        all_results.sort(key=lambda x: (int(x.get("score", 0)), -float(x.get("rsi", 0.0) or 0.0)), reverse=True)
+
+    return all_results[: int(limit)]
+
+
+def search_bursa(query):
+    q = str(query or "").upper().strip()
+    if not q:
+        return None
+    if q == "FKLI":
+        return "FKLI=F"
+    if q == "FCPO":
+        return "FCPO=F"
+    if q == "FM70":
+        return "FM70=F"
+    if q in {"^KLSE", "^KLCI", "^KLSI"}:
+        return "^KLSE"
+    if q.endswith(".KL") and len(q.split(".")[0]) == 4 and q.split(".")[0].isdigit():
+        return q
+    if q.isdigit() and len(q) == 4:
+        return f"{q}.KL"
+    if q in MARKET_INSIGHTS:
+        return q
+    # match by name or code (curated set)
+    for k, v in MARKET_INSIGHTS.items():
+        code = str(v.get("code") or "").upper().strip()
+        name = str(v.get("name") or "").upper().strip()
+        if q == code or q == name:
+            return str(k).upper().strip()
+    for k, v in MARKET_INSIGHTS.items():
+        name = str(v.get("name") or "").upper().strip()
+        if name and q in re.split(r"[^A-Z0-9]+", name):
+            return str(k).upper().strip()
+    return None
+
+
+# ----------------------------
+# RSS news + trend inference
+# ----------------------------
 _NEWS_CACHE: dict[str, tuple[float, list[dict]]] = {}
 
 
@@ -83,15 +1109,13 @@ def _parse_rss_items(xml_text: str, source: str, limit: int = 30) -> list[dict]:
     items = root.findall(".//item")
     for it in items:
         try:
-            title = it.findtext("title") or ""
-            link = it.findtext("link") or ""
-            pub = it.findtext("pubDate") or it.findtext("{http://purl.org/dc/elements/1.1/}date") or ""
-            title = unescape(str(title)).strip()
-            link = str(link).strip()
+            title = unescape(str(it.findtext("title") or "")).strip()
+            link = str(it.findtext("link") or "").strip()
+            pub = str(it.findtext("pubDate") or it.findtext("{http://purl.org/dc/elements/1.1/}date") or "")
             dt = None
             if pub:
                 try:
-                    dt = parsedate_to_datetime(str(pub))
+                    dt = parsedate_to_datetime(pub)
                 except Exception:
                     dt = None
             out.append(
@@ -144,10 +1168,7 @@ def get_latest_market_news(limit: int = 40, cache_seconds: int = 600, feeds: dic
     seen = set()
     uniq: list[dict] = []
     for it in merged:
-        try:
-            k = str(it.get("link") or "").strip() or str(it.get("title") or "").strip()
-        except Exception:
-            k = ""
+        k = str(it.get("link") or "").strip() or str(it.get("title") or "").strip()
         if not k or k in seen:
             continue
         seen.add(k)
@@ -190,10 +1211,7 @@ def infer_market_trends_from_news(news_items: list[dict], top_n: int = 6) -> dic
     sector_scores: dict[str, int] = {k: 0 for k in kw.keys()}
     theme_scores: dict[str, int] = {k: 0 for k in macro.keys()}
     for it in (news_items or []):
-        try:
-            t = (str(it.get("title") or "") + " " + str(it.get("source") or "")).lower()
-        except Exception:
-            t = ""
+        t = (str(it.get("title") or "") + " " + str(it.get("source") or "")).lower()
         if not t:
             continue
         for sec, words in kw.items():
@@ -221,3211 +1239,17 @@ def summarize_market_impacts(trends: dict) -> list[str]:
         theme_scores = {}
         sector_scores = {}
     notes: list[str] = []
-    try:
-        if int(theme_scores.get("Risk / Geopolitics", 0) or 0) > 0:
-            notes.append("Geopolitics headlines up: watch oil, freight, defense; risk-off can pressure growth and small caps.")
-    except Exception:
-        pass
-    try:
-        if int(theme_scores.get("Rates / Central Banks", 0) or 0) > 0 or int(theme_scores.get("US Macro", 0) or 0) > 0:
-            notes.append("Rates/macro in focus: banks, REITs, utilities and high-debt names are more sensitive to yields/OPR/Fed expectations.")
-    except Exception:
-        pass
-    try:
-        if int(sector_scores.get("Energy", 0) or 0) > 0 or int(sector_scores.get("Shipping", 0) or 0) > 0:
-            notes.append("Energy/shipping themes: oil & gas upstream, ports/logistics can move with crude and freight disruptions.")
-    except Exception:
-        pass
-    try:
-        if int(sector_scores.get("Technology", 0) or 0) > 0:
-            notes.append("Tech themes: semicon/AI/data-center related counters tend to follow global risk appetite and US tech leadership.")
-    except Exception:
-        pass
-    try:
-        if int(sector_scores.get("Metals", 0) or 0) > 0:
-            notes.append("Metals themes: gold/copper news often ties to risk sentiment and China/US growth expectations.")
-    except Exception:
-        pass
-    try:
-        if int(theme_scores.get("FX", 0) or 0) > 0:
-            notes.append("FX headlines: ringgit and USD moves can impact exporters/importers and commodity-linked earnings translation.")
-    except Exception:
-        pass
+    if int(theme_scores.get("Risk / Geopolitics", 0) or 0) > 0:
+        notes.append("Geopolitics headlines up: watch oil, freight, defense; risk-off can pressure growth and small caps.")
+    if int(theme_scores.get("Rates / Central Banks", 0) or 0) > 0 or int(theme_scores.get("US Macro", 0) or 0) > 0:
+        notes.append("Rates/macro in focus: banks, REITs, utilities and high-debt names are more sensitive to yields/OPR/Fed expectations.")
+    if int(sector_scores.get("Energy", 0) or 0) > 0 or int(sector_scores.get("Shipping", 0) or 0) > 0:
+        notes.append("Energy/shipping themes: oil & gas upstream, ports/logistics can move with crude and freight disruptions.")
+    if int(sector_scores.get("Technology", 0) or 0) > 0:
+        notes.append("Tech themes: semicon/AI/data-center related counters tend to follow global risk appetite and US tech leadership.")
+    if int(sector_scores.get("Metals", 0) or 0) > 0:
+        notes.append("Metals themes: gold/copper news often ties to risk sentiment and China/US growth expectations.")
+    if int(theme_scores.get("FX", 0) or 0) > 0:
+        notes.append("FX headlines: ringgit and USD moves can impact exporters/importers and commodity-linked earnings translation.")
     return notes[:6]
 
-def _tradingview_last_price_myr(symbol_path: str):
-    try:
-        url = f"https://www.tradingview.com/symbols/{symbol_path}/"
-        html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15).text
-        m = re.search(r"([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*MYR", html)
-        if not m:
-            return None
-        return float(m.group(1).replace(",", ""))
-    except Exception:
-        return None
-
-
-TRADINGVIEW_PRICE_OVERLAY_ENABLED = False
-TRADINGVIEW_PRICE_CACHE_SECONDS = 60
-_TV_PRICE_CACHE: dict[str, tuple[float, float]] = {}
-
-ITICK_BASE_URL = os.environ.get("ITICK_BASE_URL") or "https://api.itick.org"
-ITICK_DEFAULT_REGION = os.environ.get("ITICK_REGION") or "MY"
-ITICK_CACHE_SECONDS = 20
-_ITICK_KLINE_CACHE: dict[str, tuple[float, dict]] = {}
-ITICK_QUOTE_CACHE_SECONDS = 10
-_ITICK_QUOTE_CACHE: dict[str, tuple[float, dict]] = {}
-_ITICK_INFO_CACHE: dict[str, tuple[float, str]] = {}
-ITICK_INFO_CACHE_SECONDS = 24 * 3600
-
-
-def _get_itick_token() -> str | None:
-    def _clean(v) -> str | None:
-        try:
-            if v is None:
-                return None
-            s = str(v)
-            if not s:
-                return None
-            s = re.sub(r"\s+", "", s)
-            s = s.strip()
-            return s if s else None
-        except Exception:
-            return None
-
-    try:
-        token = os.environ.get("ITICK_TOKEN") or os.environ.get("itick_token")
-        token_s = _clean(token)
-        if token_s:
-            return token_s
-    except Exception:
-        pass
-
-    try:
-        import streamlit as st  # type: ignore
-        try:
-            ss = getattr(st, "session_state", None)
-            if ss is not None:
-                for k in ["ITICK_TOKEN", "itick_token", "itick_token_input"]:
-                    try:
-                        v = ss.get(k)
-                    except Exception:
-                        try:
-                            v = ss[k]
-                        except Exception:
-                            v = None
-                    v_s = _clean(v)
-                    if v_s:
-                        return v_s
-        except Exception:
-            pass
-        secrets = getattr(st, "secrets", None)
-        if secrets is None:
-            return None
-        for k in ["ITICK_TOKEN", "itick_token", "ITICK_API_TOKEN", "itick_api_token"]:
-            try:
-                if k in secrets:
-                    v = secrets[k]
-                else:
-                    v = None
-            except Exception:
-                try:
-                    v = secrets.get(k)
-                except Exception:
-                    v = None
-            v_s = _clean(v)
-            if v_s:
-                return v_s
-        return None
-    except Exception:
-        return None
-
-
-def itick_enabled() -> bool:
-    try:
-        return bool(_get_itick_token())
-    except Exception:
-        return False
-
-
-def _itick_get_json_with_meta(path: str, params: dict) -> tuple[dict | None, dict]:
-    try:
-        meta = {"http_status": None, "api_code": None, "msg": None, "auth_header": None, "body": None, "attempts": []}
-        token = _get_itick_token()
-        if not token:
-            meta["msg"] = "missing-token"
-            return None, meta
-        url = str(ITICK_BASE_URL).rstrip("/") + str(path)
-        header_candidates = [
-            ("token", {"accept": "application/json", "token": token, "User-Agent": "Mozilla/5.0"}),
-            ("Token", {"accept": "application/json", "Token": token, "User-Agent": "Mozilla/5.0"}),
-            ("Authorization", {"accept": "application/json", "Authorization": f"Bearer {token}", "User-Agent": "Mozilla/5.0"}),
-        ]
-        last_meta = dict(meta)
-        for header_name, headers in header_candidates:
-            try:
-                r = requests.get(url, params=params, headers=headers, timeout=20)
-            except Exception:
-                continue
-            last_meta = {"http_status": int(getattr(r, "status_code", 0) or 0), "api_code": None, "msg": None, "auth_header": header_name, "body": None, "attempts": list(meta.get("attempts") or [])}
-            j = None
-            try:
-                j = r.json()
-            except Exception:
-                j = None
-            if isinstance(j, dict):
-                last_meta["api_code"] = j.get("code")
-                last_meta["msg"] = j.get("msg")
-            else:
-                try:
-                    txt = r.text
-                    if txt:
-                        last_meta["body"] = str(txt)[:200]
-                except Exception:
-                    pass
-            try:
-                last_meta["attempts"].append(
-                    {
-                        "auth": header_name,
-                        "http": last_meta.get("http_status"),
-                        "api_code": last_meta.get("api_code"),
-                        "msg": last_meta.get("msg"),
-                    }
-                )
-            except Exception:
-                pass
-            if int(last_meta["http_status"] or 0) != 200:
-                continue
-            if not isinstance(j, dict):
-                continue
-            if int(j.get("code", 0) or 0) != 0:
-                continue
-            return j, last_meta
-        return None, last_meta
-    except Exception:
-        return None, {"http_status": None, "api_code": None, "msg": "error"}
-
-
-def _itick_get_json(path: str, params: dict) -> dict | None:
-    try:
-        j, _ = _itick_get_json_with_meta(path, params)
-        return j
-    except Exception:
-        return None
-
-
-def itick_probe_stock_klines(code: str, region: str | None = None, ktype: int = 2, limit: int = 5) -> dict:
-    try:
-        region_in = (region or ITICK_DEFAULT_REGION or "MY").strip()
-        c = str(code or "").strip().upper()
-        if c.endswith(".KL"):
-            c = c[:-3]
-        params = {"region": region_in, "codes": c, "kType": str(int(ktype)), "limit": str(int(limit))}
-        _, meta = _itick_get_json_with_meta("/stock/klines", params)
-        meta["region"] = region_in
-        meta["code"] = c
-        return meta
-    except Exception:
-        return {"http_status": None, "api_code": None, "msg": "error", "region": region, "code": code}
-
-
-def itick_probe_stock_quotes(code: str, region: str | None = None) -> dict:
-    try:
-        region_in = (region or ITICK_DEFAULT_REGION or "MY").strip()
-        c = str(code or "").strip().upper()
-        if c.endswith(".KL"):
-            c = c[:-3]
-        params = {"region": region_in, "codes": c}
-        _, meta = _itick_get_json_with_meta("/stock/quotes", params)
-        meta["region"] = region_in
-        meta["code"] = c
-        return meta
-    except Exception:
-        return {"http_status": None, "api_code": None, "msg": "error", "region": region, "code": code}
-
-
-def _itick_stock_klines(codes: list[str], ktype: int = 2, limit: int = 120, region: str | None = None) -> dict[str, pd.DataFrame]:
-    try:
-        region_in = (region or ITICK_DEFAULT_REGION or "MY").strip()
-        region_u = region_in.upper()
-        region_candidates = []
-        for v in [region_in, region_u]:
-            if v and v not in region_candidates:
-                region_candidates.append(v)
-        if region_u == "MY":
-            for v in ["Malaysia", "MALAYSIA"]:
-                if v not in region_candidates:
-                    region_candidates.append(v)
-        elif region_u == "MALAYSIA":
-            for v in ["MY"]:
-                if v not in region_candidates:
-                    region_candidates.append(v)
-        norm_codes = []
-        for c in codes or []:
-            x = str(c or "").strip().upper()
-            if x.endswith(".KL"):
-                x = x[:-3]
-            if x:
-                norm_codes.append(x)
-        norm_codes = sorted(set(norm_codes))
-        if not norm_codes:
-            return {}
-        limit_i = int(limit) if limit is not None else 120
-        if limit_i < 10:
-            limit_i = 10
-        if limit_i > 500:
-            limit_i = 500
-        ktype_i = int(ktype) if ktype is not None else 2
-        if ktype_i not in {1, 2, 3, 4, 5, 8}:
-            ktype_i = 2
-
-        cache_key = f"{region_candidates[0] if region_candidates else region_in}|{ktype_i}|{limit_i}|{','.join(norm_codes)}"
-        now = time.time()
-        hit = _ITICK_KLINE_CACHE.get(cache_key)
-        if hit and (now - float(hit[0])) <= float(ITICK_CACHE_SECONDS):
-            return hit[1]
-
-        data = None
-        for region_v in (region_candidates or [region_in]):
-            params = {"region": region_v, "codes": ",".join(norm_codes), "kType": str(ktype_i), "limit": str(limit_i)}
-            j = _itick_get_json("/stock/klines", params)
-            if not j:
-                continue
-            d = j.get("data")
-            if isinstance(d, dict):
-                data = d
-                break
-        if not isinstance(data, dict):
-            return {}
-
-        out: dict[str, pd.DataFrame] = {}
-        for code, rows in data.items():
-            if not isinstance(rows, list) or not rows:
-                continue
-            recs = []
-            for r in rows:
-                if not isinstance(r, dict):
-                    continue
-                t = r.get("t")
-                if t is None:
-                    continue
-                try:
-                    ts = pd.to_datetime(int(t), unit="ms", utc=True).tz_convert("Asia/Kuala_Lumpur")
-                except Exception:
-                    continue
-                recs.append(
-                    {
-                        "Date": ts,
-                        "Open": r.get("o"),
-                        "High": r.get("h"),
-                        "Low": r.get("l"),
-                        "Close": r.get("c"),
-                        "Volume": r.get("v"),
-                    }
-                )
-            if not recs:
-                continue
-            df = pd.DataFrame(recs).set_index("Date").sort_index()
-            for c in ["Open", "High", "Low", "Close", "Volume"]:
-                if c in df.columns:
-                    df[c] = pd.to_numeric(df[c], errors="coerce")
-            df = df.dropna(subset=["Close"])
-            if df.empty:
-                continue
-            out[str(code).upper().strip()] = df
-
-        _ITICK_KLINE_CACHE[cache_key] = (now, out)
-        return out
-    except Exception:
-        return {}
-
-
-def _itick_stock_quotes(codes: list[str], region: str | None = None) -> dict[str, dict]:
-    try:
-        region_in = (region or ITICK_DEFAULT_REGION or "MY").strip()
-        region_u = region_in.upper()
-        region_candidates = []
-        for v in [region_in, region_u]:
-            if v and v not in region_candidates:
-                region_candidates.append(v)
-        if region_u == "MY":
-            for v in ["Malaysia", "MALAYSIA"]:
-                if v not in region_candidates:
-                    region_candidates.append(v)
-        elif region_u == "MALAYSIA":
-            for v in ["MY"]:
-                if v not in region_candidates:
-                    region_candidates.append(v)
-
-        norm_codes = []
-        for c in codes or []:
-            x = str(c or "").strip().upper()
-            if x.endswith(".KL"):
-                x = x[:-3]
-            if x:
-                norm_codes.append(x)
-        norm_codes = sorted(set(norm_codes))
-        if not norm_codes:
-            return {}
-
-        cache_key = f"{region_candidates[0] if region_candidates else region_in}|{','.join(norm_codes)}"
-        now = time.time()
-        hit = _ITICK_QUOTE_CACHE.get(cache_key)
-        if hit and (now - float(hit[0])) <= float(ITICK_QUOTE_CACHE_SECONDS):
-            return hit[1]
-
-        data = None
-        for region_v in (region_candidates or [region_in]):
-            j = _itick_get_json("/stock/quotes", {"region": region_v, "codes": ",".join(norm_codes)})
-            if not j:
-                continue
-            d = j.get("data")
-            if isinstance(d, dict):
-                data = d
-                break
-        if not isinstance(data, dict):
-            return {}
-
-        out = {}
-        for k, v in data.items():
-            if not isinstance(v, dict):
-                continue
-            out[str(k).upper().strip()] = v
-        _ITICK_QUOTE_CACHE[cache_key] = (now, out)
-        return out
-    except Exception:
-        return {}
-
-
-def _itick_stock_name(code: str, region: str | None = None) -> str | None:
-    try:
-        token = _get_itick_token()
-        if not token:
-            return None
-        c = str(code or "").strip().upper()
-        if c.endswith(".KL"):
-            c = c[:-3]
-        if not c:
-            return None
-        region_v = (region or ITICK_DEFAULT_REGION or "MY").strip().upper()
-
-        now = time.time()
-        hit = _ITICK_INFO_CACHE.get(f"{region_v}:{c}")
-        if hit and (now - float(hit[0])) <= float(ITICK_INFO_CACHE_SECONDS):
-            return hit[1]
-
-        j = _itick_get_json("/stock/info", {"type": "stock", "region": region_v, "code": c})
-        if not j:
-            return None
-        data = j.get("data")
-        if not isinstance(data, dict):
-            return None
-        name = data.get("n")
-        if not name:
-            return None
-        name_s = str(name).strip()
-        if not name_s:
-            return None
-        _ITICK_INFO_CACHE[f"{region_v}:{c}"] = (now, name_s)
-        return name_s
-    except Exception:
-        return None
-
-
-def _tradingview_last_price_cached_myr(symbol_path: str) -> float | None:
-    try:
-        key = str(symbol_path or "").strip()
-        if not key:
-            return None
-        now = time.time()
-        hit = _TV_PRICE_CACHE.get(key)
-        if hit and (now - float(hit[0])) <= float(TRADINGVIEW_PRICE_CACHE_SECONDS):
-            return float(hit[1])
-        p = _tradingview_last_price_myr(key)
-        if p is None:
-            return None
-        _TV_PRICE_CACHE[key] = (now, float(p))
-        return float(p)
-    except Exception:
-        return None
-
-
-def tradingview_last_price_for_ticker_myr(ticker: str) -> float | None:
-    try:
-        t = str(ticker or "").upper().strip()
-        if not t:
-            return None
-        if t in {"FKLI=F", "FCPO=F"}:
-            return None
-        code = t.split(".")[0]
-        if code.isdigit() and len(code) == 4:
-            return _tradingview_last_price_cached_myr(f"MYX-{code}")
-        return None
-    except Exception:
-        return None
-
-
-def _synthetic_price_df(price: float, rows: int = 90):
-    idx = pd.date_range(end=pd.Timestamp.now(tz="Asia/Kuala_Lumpur"), periods=rows, freq="B")
-    df = pd.DataFrame(
-        {
-            "Open": price,
-            "High": price,
-            "Low": price,
-            "Close": price,
-            "Volume": 0,
-        },
-        index=idx,
-    )
-    return df
-
-
-def get_stock_data(ticker, period="1y"):
-    """
-    Fetches historical stock data from Yahoo Finance.
-    Handles alternative symbols for futures and prioritizes knowledge base names.
-    """
-    ticker = ticker.upper().strip()
-
-    def _merge_intraday_daily(df: pd.DataFrame, stock_obj):
-        try:
-            intra = None
-            for interval in ["5m", "15m", "30m", "60m"]:
-                try:
-                    intra = stock_obj.history(period="5d", interval=interval)
-                    if intra is not None and not intra.empty:
-                        break
-                except Exception:
-                    intra = None
-            if intra is None or intra.empty:
-                return df
-            if not all(c in intra.columns for c in ["Open", "High", "Low", "Close", "Volume"]):
-                return df
-            if intra.index.tz is None:
-                intra.index = intra.index.tz_localize("UTC")
-            intra_kl = intra.copy()
-            intra_kl.index = intra_kl.index.tz_convert("Asia/Kuala_Lumpur")
-            day = intra_kl.index[-1].normalize()
-            intra_day = intra_kl[intra_kl.index.normalize() == day]
-            if intra_day is None or intra_day.empty:
-                return df
-
-            o = float(intra_day["Open"].iloc[0])
-            h = float(pd.to_numeric(intra_day["High"], errors="coerce").max())
-            l = float(pd.to_numeric(intra_day["Low"], errors="coerce").min())
-            c = float(intra_day["Close"].iloc[-1])
-            v = float(pd.to_numeric(intra_day["Volume"], errors="coerce").fillna(0).sum())
-            if not all(x == x for x in [o, h, l, c]):
-                return df
-
-            ts = pd.Timestamp(day)
-            if ts.tz is None:
-                ts = ts.tz_localize("Asia/Kuala_Lumpur")
-            else:
-                ts = ts.tz_convert("Asia/Kuala_Lumpur")
-            if df.index.tz is None:
-                df = df.copy()
-                df.index = df.index.tz_localize("Asia/Kuala_Lumpur")
-            else:
-                df = df.copy()
-                df.index = df.index.tz_convert("Asia/Kuala_Lumpur")
-
-            row = {
-                "Open": o,
-                "High": h,
-                "Low": l,
-                "Close": c,
-                "Volume": v,
-            }
-            if "Dividends" in df.columns:
-                row["Dividends"] = 0.0
-            if "Stock Splits" in df.columns:
-                row["Stock Splits"] = 0.0
-
-            if ts in df.index:
-                df.loc[ts, list(row.keys())] = list(row.values())
-            else:
-                df = pd.concat([df, pd.DataFrame([row], index=[ts])]).sort_index()
-            return df
-        except Exception:
-            return df
-
-    if ticker == "FKLI=F":
-        df = None
-        stock = None
-        try:
-            stock = yf.Ticker("^KLSE")
-            df = stock.history(period=period)
-            if df is not None and df.empty and period != "1mo":
-                df = stock.history(period="1mo")
-        except Exception:
-            df = None
-
-        if df is not None and not df.empty and stock is not None:
-            df = _merge_intraday_daily(df, stock)
-            price = _tradingview_last_price_myr("MYX-FKLI1!")
-            if price is not None:
-                try:
-                    df = df.copy()
-                    if "Close" in df.columns:
-                        df.iloc[-1, df.columns.get_loc("Close")] = price
-                    for c in ["Open", "High", "Low"]:
-                        if c in df.columns and pd.isna(df[c].iloc[-1]):
-                            df.iloc[-1, df.columns.get_loc(c)] = price
-                except Exception:
-                    pass
-            return df, MARKET_INSIGHTS.get("FKLI=F", {}).get("name", "KLCI FUTURES")
-
-        price = _tradingview_last_price_myr("MYX-FKLI1!")
-        if price is not None:
-            return _synthetic_price_df(price), MARKET_INSIGHTS.get("FKLI=F", {}).get("name", "KLCI FUTURES")
-
-    if ticker == "FCPO=F":
-        price = _tradingview_last_price_myr("MYX-FCPO1!")
-        if price is not None:
-            return _synthetic_price_df(price), MARKET_INSIGHTS.get("FCPO=F", {}).get("name", "CPO FUTURES")
-
-    ALT_SYMBOLS = {
-        "FKLI=F": ["^KLSE"],
-        "FCPO=F": [],
-        "FM70=F": ["FBM70.FGI"]
-    }
-    
-    symbols_to_try = ALT_SYMBOLS.get(ticker, [ticker]) or [ticker]
-    
-    # Prioritize name from knowledge base
-    base_name = ticker
-    if ticker in MARKET_INSIGHTS:
-        base_name = MARKET_INSIGHTS[ticker]['name']
-    else:
-        # Try matching by code (e.g. 6888)
-        code = ticker.split(".")[0]
-        for k, v in MARKET_INSIGHTS.items():
-            if v.get('code') == code:
-                base_name = v['name']
-                break
-
-    def _resolve_best_name() -> str:
-        try:
-            n = str(base_name or ticker)
-            auto_name = _auto_universe_name(ticker)
-            if auto_name:
-                return str(auto_name)
-            try:
-                code2 = str(ticker).split(".")[0]
-                it_name = _itick_stock_name(code2)
-                if it_name:
-                    return str(it_name)
-            except Exception:
-                pass
-            return n
-        except Exception:
-            return str(base_name or ticker)
-
-    mode = str(globals().get("PRICE_CACHE_MODE", "fast") or "fast").lower().strip()
-    max_age = int(globals().get("PRICE_CACHE_MAX_AGE_SECONDS", 0) or 0)
-    if mode in {"fast", "offline"}:
-        cached_df, meta = _read_price_cache(ticker)
-        if cached_df is not None and not cached_df.empty:
-            if mode == "offline":
-                return cached_df, _resolve_best_name()
-            try:
-                age_s = time.time() - float((meta or {}).get("mtime") or 0)
-                if max_age <= 0 or age_s <= float(max_age):
-                    if bool(globals().get("TRADINGVIEW_PRICE_OVERLAY_ENABLED")):
-                        p = tradingview_last_price_for_ticker_myr(ticker)
-                        if p is not None and "Close" in cached_df.columns:
-                            try:
-                                dfc = cached_df.copy()
-                                dfc.iloc[-1, dfc.columns.get_loc("Close")] = float(p)
-                                return dfc, base_name
-                            except Exception:
-                                pass
-                    return cached_df, _resolve_best_name()
-            except Exception:
-                pass
-    
-    def _fetch_yahoo_chart(sym: str, rng: str, interval: str = "1d"):
-        try:
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
-            params = {
-                "range": rng,
-                "interval": interval,
-                "includePrePost": "false",
-                "events": "div%7Csplit",
-            }
-            r = requests.get(
-                url,
-                params=params,
-                headers={
-                    "User-Agent": "Mozilla/5.0",
-                    "Accept-Language": "en-US,en;q=0.9",
-                },
-                timeout=25,
-            )
-            if r.status_code != 200:
-                return None
-            j = r.json()
-            result = (((j or {}).get("chart") or {}).get("result") or [None])[0]
-            if not result:
-                return None
-            ts = result.get("timestamp") or []
-            ind = ((result.get("indicators") or {}).get("quote") or [None])[0] or {}
-            if not ts or not ind:
-                return None
-            df = pd.DataFrame(
-                {
-                    "Open": ind.get("open"),
-                    "High": ind.get("high"),
-                    "Low": ind.get("low"),
-                    "Close": ind.get("close"),
-                    "Volume": ind.get("volume"),
-                },
-                index=pd.to_datetime(ts, unit="s", utc=True),
-            )
-            df = df.dropna(subset=[c for c in ["Close"] if c in df.columns])
-            if df.empty:
-                return None
-            try:
-                df.index = df.index.tz_convert("Asia/Kuala_Lumpur")
-            except Exception:
-                pass
-            return df
-        except Exception:
-            return None
-
-    def _fetch_bursa_price_api(sym: str, outputsize: str = "compact"):
-        try:
-            base_url = os.environ.get("BURSA_PRICE_API_BASE_URL")
-            api_key = os.environ.get("BURSA_PRICE_API_KEY")
-            if not base_url or not api_key:
-                return None
-
-            symbol_raw = str(sym or "").strip().upper()
-            if symbol_raw.endswith(".KL"):
-                symbol_raw = symbol_raw[:-3]
-            if symbol_raw.isdigit() and len(symbol_raw) == 4:
-                symbol_try = symbol_raw
-            else:
-                symbol_try = symbol_raw
-
-            params = {
-                "function": "TIME_SERIES_DAILY",
-                "symbol": symbol_try,
-                "outputsize": outputsize,
-                "datatype": "json",
-                "apikey": api_key,
-            }
-            r = requests.get(
-                base_url,
-                params=params,
-                headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"},
-                timeout=25,
-            )
-            if r.status_code != 200:
-                return None
-            j = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
-            if not isinstance(j, dict):
-                return None
-
-            ts = j.get("Time Series (Daily)") or j.get("TIME_SERIES_DAILY") or j.get("time_series_daily")
-            if not isinstance(ts, dict) or not ts:
-                return None
-
-            rows = []
-            for date_str, v in ts.items():
-                if not isinstance(v, dict):
-                    continue
-                def _pick(*keys):
-                    for k in keys:
-                        if k in v and v[k] is not None:
-                            return v[k]
-                    return None
-
-                o = _pick("1. open", "open", "o")
-                h = _pick("2. high", "high", "h")
-                l = _pick("3. low", "low", "l")
-                c = _pick("4. close", "close", "c")
-                vol = _pick("5. volume", "volume", "v")
-                if c is None:
-                    continue
-                rows.append(
-                    {
-                        "Date": pd.to_datetime(date_str),
-                        "Open": float(o) if o is not None else None,
-                        "High": float(h) if h is not None else None,
-                        "Low": float(l) if l is not None else None,
-                        "Close": float(c) if c is not None else None,
-                        "Volume": float(vol) if vol is not None else None,
-                    }
-                )
-            if not rows:
-                return None
-            df = pd.DataFrame(rows).set_index("Date").sort_index()
-            df = df.dropna(subset=["Close"])
-            return df if not df.empty else None
-        except Exception:
-            return None
-
-    period_map = {
-        "1mo": "1mo",
-        "3mo": "3mo",
-        "6mo": "6mo",
-        "1y": "1y",
-        "2y": "2y",
-        "5y": "5y",
-        "10y": "10y",
-        "max": "max",
-    }
-    rng = period_map.get(str(period).lower().strip(), "1y")
-
-    for symbol in symbols_to_try:
-        try:
-            stock = yf.Ticker(symbol)
-            df = stock.history(period=period)
-            
-            if df.empty and period != "1mo":
-                df = stock.history(period="1mo")
-            
-            if not df.empty:
-                try:
-                    if df.index.tz is None:
-                        df = df.copy()
-                        df.index = df.index.tz_localize("Asia/Kuala_Lumpur")
-                    else:
-                        df = df.copy()
-                        df.index = df.index.tz_convert("Asia/Kuala_Lumpur")
-                except Exception:
-                    pass
-                df = _merge_intraday_daily(df, stock)
-
-                name = base_name
-                # Only try yfinance info if we don't have a good name yet
-                if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
-                    try:
-                        mapped_name = (
-                            _file_universe_name(symbol)
-                            or _file_universe_name(ticker)
-                            or _auto_universe_name(symbol)
-                            or _auto_universe_name(ticker)
-                        )
-                        if mapped_name:
-                            name = mapped_name
-                    except Exception:
-                        pass
-                if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
-                    try:
-                        yf_info = stock.info
-                        name = yf_info.get('shortName') or yf_info.get('longName') or name
-                    except:
-                        pass
-                if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
-                    try:
-                        it_name = _itick_stock_name(ticker)
-                        if it_name:
-                            name = it_name
-                    except Exception:
-                        pass
-                try:
-                    _write_price_cache(ticker, df)
-                except Exception:
-                    pass
-
-                if bool(globals().get("TRADINGVIEW_PRICE_OVERLAY_ENABLED")):
-                    p = tradingview_last_price_for_ticker_myr(ticker)
-                    if p is not None and "Close" in df.columns:
-                        try:
-                            df = df.copy()
-                            df.iloc[-1, df.columns.get_loc("Close")] = float(p)
-                        except Exception:
-                            pass
-                return df, name
-        except Exception:
-            continue
-
-        try:
-            df2 = _fetch_yahoo_chart(symbol, rng, interval="1d")
-            if df2 is None and rng != "1mo":
-                df2 = _fetch_yahoo_chart(symbol, "1mo", interval="1d")
-            if df2 is not None and not df2.empty:
-                name = base_name
-                try:
-                    mapped_name = (
-                        _file_universe_name(symbol)
-                        or _file_universe_name(ticker)
-                        or _auto_universe_name(symbol)
-                        or _auto_universe_name(ticker)
-                    )
-                    if mapped_name:
-                        name = mapped_name
-                except Exception:
-                    pass
-                if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
-                    try:
-                        yf_info = yf.Ticker(symbol).info
-                        name = yf_info.get('shortName') or yf_info.get('longName') or name
-                    except Exception:
-                        pass
-                if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
-                    try:
-                        it_name = _itick_stock_name(ticker)
-                        if it_name:
-                            name = it_name
-                    except Exception:
-                        pass
-                try:
-                    _write_price_cache(ticker, df2)
-                except Exception:
-                    pass
-
-                if bool(globals().get("TRADINGVIEW_PRICE_OVERLAY_ENABLED")):
-                    p = tradingview_last_price_for_ticker_myr(ticker)
-                    if p is not None and "Close" in df2.columns:
-                        try:
-                            df2 = df2.copy()
-                            df2.iloc[-1, df2.columns.get_loc("Close")] = float(p)
-                        except Exception:
-                            pass
-                return df2, name
-        except Exception:
-            pass
-
-        try:
-            df3 = _fetch_bursa_price_api(symbol, outputsize="compact")
-            if df3 is None and str(period).lower().strip() in {"2y", "5y", "10y", "max"}:
-                df3 = _fetch_bursa_price_api(symbol, outputsize="full")
-            if df3 is not None and not df3.empty:
-                name = base_name
-                try:
-                    mapped_name = (
-                        _file_universe_name(symbol)
-                        or _file_universe_name(ticker)
-                        or _auto_universe_name(symbol)
-                        or _auto_universe_name(ticker)
-                    )
-                    if mapped_name:
-                        name = mapped_name
-                except Exception:
-                    pass
-                if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
-                    try:
-                        yf_info = yf.Ticker(symbol).info
-                        name = yf_info.get('shortName') or yf_info.get('longName') or name
-                    except Exception:
-                        pass
-                if name == ticker or ".KL" in str(name) or str(name).strip() == ticker.split(".")[0]:
-                    try:
-                        it_name = _itick_stock_name(ticker)
-                        if it_name:
-                            name = it_name
-                    except Exception:
-                        pass
-                try:
-                    _write_price_cache(ticker, df3)
-                except Exception:
-                    pass
-
-                if bool(globals().get("TRADINGVIEW_PRICE_OVERLAY_ENABLED")):
-                    p = tradingview_last_price_for_ticker_myr(ticker)
-                    if p is not None and "Close" in df3.columns:
-                        try:
-                            df3 = df3.copy()
-                            df3.iloc[-1, df3.columns.get_loc("Close")] = float(p)
-                        except Exception:
-                            pass
-                return df3, name
-        except Exception:
-            pass
-
-    cached_df, _ = _read_price_cache(ticker)
-    if cached_df is not None and not cached_df.empty:
-        return cached_df, _resolve_best_name()
-    return None, base_name
-
-def _is_today_kl(ts) -> bool:
-    try:
-        t = pd.Timestamp(ts)
-        if t.tz is None:
-            t = t.tz_localize("Asia/Kuala_Lumpur")
-        else:
-            t = t.tz_convert("Asia/Kuala_Lumpur")
-        return t.normalize() == pd.Timestamp.now(tz="Asia/Kuala_Lumpur").normalize()
-    except Exception:
-        return False
-
-def _resolve_insight(ticker: str, resolved_name: str | None):
-    t = str(ticker).upper().strip()
-    code = t.split(".")[0]
-    analysis = "Technical breakout analysis based on live data."
-    catalyst = "Market momentum / Trend following."
-
-    insight = MARKET_INSIGHTS.get(t)
-    if not insight:
-        for _, v in MARKET_INSIGHTS.items():
-            if v.get("code") == code:
-                insight = v
-                break
-
-    if insight:
-        name = insight["name"]
-        code = insight["code"]
-        analysis = insight["analysis"]
-        catalyst = insight["catalyst"]
-    else:
-        name = resolved_name or code
-        try:
-            if str(name).strip().upper() in {t, code, f"{code}.KL"} or ".KL" in str(name).upper():
-                auto_name = _auto_universe_name(t) or _auto_universe_name(f"{code}.KL")
-                if auto_name:
-                    name = auto_name
-        except Exception:
-            pass
-
-    if name == t or name == code or ".KL" in str(name):
-        name = str(name).replace(".KL", "").strip()
-
-    if str(name).strip() == code:
-        try:
-            it_name = _itick_stock_name(code)
-            if it_name:
-                name = it_name
-        except Exception:
-            pass
-
-    return code, name, analysis, catalyst
-
-
-def _resolve_insight_v3(ticker: str, resolved_name: str | None):
-    t = str(ticker).upper().strip()
-    code = t.split(".")[0]
-    analysis = "Technical breakout analysis based on live data."
-    catalyst = "Market momentum / Trend following."
-    sector = "Unknown"
-
-    insight = MARKET_INSIGHTS.get(t)
-    if not insight:
-        for _, v in MARKET_INSIGHTS.items():
-            if v.get("code") == code:
-                insight = v
-                break
-
-    if insight:
-        name = insight["name"]
-        code = insight["code"]
-        analysis = insight["analysis"]
-        catalyst = insight["catalyst"]
-        sector = str(insight.get("sector") or sector).strip() or sector
-    else:
-        name = resolved_name or code
-        try:
-            if str(name).strip().upper() in {t, code, f"{code}.KL"} or ".KL" in str(name).upper():
-                auto_name = _auto_universe_name(t) or _auto_universe_name(f"{code}.KL")
-                if auto_name:
-                    name = auto_name
-        except Exception:
-            pass
-
-    if name == t or name == code or ".KL" in str(name):
-        name = str(name).replace(".KL", "").strip()
-
-    if str(name).strip() == code:
-        try:
-            it_name = _itick_stock_name(code)
-            if it_name:
-                name = it_name
-        except Exception:
-            pass
-
-    return code, name, sector, analysis, catalyst
-
-def analyze_breakout(ticker, df, resolved_name=None, min_rows=50):
-    """
-    Performs technical breakout analysis.
-    Returns a dictionary with results.
-    """
-    if df is None or len(df) < min_rows:
-        return None
-
-    if len(df) >= 2:
-        try:
-            last_close = df["Close"].iloc[-1] if "Close" in df.columns else None
-            last_open = df["Open"].iloc[-1] if "Open" in df.columns else None
-            if (pd.isna(last_close) or pd.isna(last_open)):
-                df = df.iloc[:-1]
-            elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0 and not _is_today_kl(df.index[-1]):
-                df = df.iloc[:-1]
-        except Exception:
-            pass
-
-    if df is None or len(df) < min_rows:
-        return None
-
-    ticker = ticker.upper().strip()
-    current_price = df['Close'].iloc[-1]
-    
-    # Technical Indicators (Safe checks for short data)
-    try:
-        sma_20 = SMAIndicator(df['Close'], window=20).sma_indicator().iloc[-1]
-        sma_50 = SMAIndicator(df['Close'], window=50).sma_indicator().iloc[-1]
-        rsi = RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
-        if pd.isna(rsi):
-            rsi = 50.0
-        
-        # Breakout Logic
-        avg_volume_20 = df['Volume'].rolling(window=20).mean().iloc[-1]
-        current_volume = df['Volume'].iloc[-1]
-        
-        is_above_sma = current_price > sma_20 and current_price > sma_50
-        is_volume_surge = current_volume > (avg_volume_20 * 1.5)
-        is_price_break = current_price > df['Close'].iloc[-20:-1].max() # 20-day high
-        
-        # Scoring
-        score = 0
-        if is_above_sma: score += 1
-        if is_volume_surge: score += 2
-        if is_price_break: score += 2
-    except:
-        # Fallback for very short data (e.g. newly listed or restricted history)
-        rsi = 50.0
-        score = 1
-        is_volume_surge = False
-    
-    code, name, analysis, catalyst = _resolve_insight(ticker, resolved_name)
-    
-    return {
-        "ticker": ticker,
-        "code": code,
-        "name": name,
-        "price": float(round(float(current_price), 3)),
-        "rsi": float(round(float(rsi), 2)),
-        "volume_surge": bool(is_volume_surge),
-        "score": score,
-        "analysis": analysis,
-        "catalyst": catalyst
-    }
-
-def analyze_breakout_v2(ticker, df, resolved_name=None, benchmark_df=None, min_rows=120):
-    if df is None or len(df) < min_rows:
-        return None
-
-    if len(df) >= 2:
-        try:
-            last_close = df["Close"].iloc[-1] if "Close" in df.columns else None
-            last_open = df["Open"].iloc[-1] if "Open" in df.columns else None
-            if (pd.isna(last_close) or pd.isna(last_open)):
-                df = df.iloc[:-1]
-            elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0 and not _is_today_kl(df.index[-1]):
-                df = df.iloc[:-1]
-        except Exception:
-            pass
-
-    if df is None or len(df) < min_rows:
-        return None
-
-    ticker = str(ticker).upper().strip()
-    df = df.copy()
-    for c in ["Open", "High", "Low", "Close", "Volume"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-
-    try:
-        current_close = float(df["Close"].iloc[-1])
-        if not (current_close > 0.0):
-            return None
-    except Exception:
-        return None
-
-    rsi = 50.0
-    try:
-        rsi_v = RSIIndicator(df["Close"], window=14).rsi().iloc[-1]
-        if rsi_v == rsi_v:
-            rsi = float(rsi_v)
-    except Exception:
-        pass
-
-    sma20 = sma50 = sma200 = None
-    try:
-        sma20 = float(SMAIndicator(df["Close"], window=20).sma_indicator().iloc[-1])
-        sma50 = float(SMAIndicator(df["Close"], window=50).sma_indicator().iloc[-1])
-        if len(df) >= 220:
-            sma200 = float(SMAIndicator(df["Close"], window=200).sma_indicator().iloc[-1])
-    except Exception:
-        pass
-
-    score = 0
-    score_max = 10
-
-    try:
-        if sma50 is not None and current_close > sma50:
-            sma50_prev = float(SMAIndicator(df["Close"], window=50).sma_indicator().iloc[-6])
-            if sma50_prev == sma50_prev and sma50 > sma50_prev:
-                score += 2
-    except Exception:
-        pass
-
-    try:
-        if sma200 is not None and current_close > sma200:
-            sma200_prev = float(SMAIndicator(df["Close"], window=200).sma_indicator().iloc[-6])
-            if sma200_prev == sma200_prev and sma200 > sma200_prev:
-                score += 2
-    except Exception:
-        pass
-
-    breakout_lookback = 55
-    try:
-        if len(df) >= breakout_lookback + 5:
-            prior_high = float(df["Close"].iloc[-breakout_lookback:-1].max())
-            if current_close > prior_high:
-                score += 2
-    except Exception:
-        pass
-
-    try:
-        o = float(df["Open"].iloc[-1])
-        h = float(df["High"].iloc[-1])
-        l = float(df["Low"].iloc[-1])
-        if h > l:
-            close_pos = (current_close - l) / (h - l)
-            if close_pos >= 0.7:
-                score += 1
-    except Exception:
-        pass
-
-    try:
-        if "Volume" in df.columns and len(df) >= 30:
-            current_vol = float(df["Volume"].iloc[-1])
-            avg_vol20 = float(df["Volume"].rolling(window=20).mean().iloc[-1])
-            if avg_vol20 > 0 and current_vol >= avg_vol20 * 1.8:
-                score += 1
-            traded_value20 = float((df["Close"] * df["Volume"]).rolling(window=20).mean().iloc[-1])
-            if traded_value20 >= 1_000_000:
-                score += 1
-    except Exception:
-        pass
-
-    rs_3m = None
-    try:
-        if benchmark_df is not None and not benchmark_df.empty:
-            s = df["Close"].copy()
-            b = benchmark_df["Close"].copy() if "Close" in benchmark_df.columns else None
-            if b is not None:
-                join = pd.concat([s, b], axis=1, join="inner").dropna()
-                if len(join) >= 70:
-                    s_now = float(join.iloc[-1, 0])
-                    s_prev = float(join.iloc[-64, 0])
-                    b_now = float(join.iloc[-1, 1])
-                    b_prev = float(join.iloc[-64, 1])
-                    if s_prev > 0 and b_prev > 0:
-                        rs_3m = (s_now / s_prev) - (b_now / b_prev)
-                        if rs_3m > 0:
-                            score += 1
-    except Exception:
-        pass
-
-    atr_contraction = False
-    try:
-        if len(df) >= 40:
-            prev_close = df["Close"].shift(1)
-            tr = pd.concat(
-                [
-                    (df["High"] - df["Low"]).abs(),
-                    (df["High"] - prev_close).abs(),
-                    (df["Low"] - prev_close).abs(),
-                ],
-                axis=1,
-            ).max(axis=1)
-            atr14 = tr.rolling(window=14).mean()
-            atr_pct = atr14 / df["Close"]
-            recent = float(pd.to_numeric(atr_pct.tail(5), errors="coerce").dropna().mean())
-            prior = float(pd.to_numeric(atr_pct.iloc[-25:-5], errors="coerce").dropna().mean())
-            if prior > 0 and recent > 0 and recent <= prior * 0.8:
-                atr_contraction = True
-                score += 1
-    except Exception:
-        pass
-
-    code, name, analysis, catalyst = _resolve_insight(ticker, resolved_name)
-
-    return {
-        "ticker": ticker,
-        "code": code,
-        "name": name,
-        "price": float(round(float(current_close), 3)),
-        "rsi": float(round(float(rsi), 2)),
-        "score": int(score),
-        "score_max": int(score_max),
-        "analysis": analysis,
-        "catalyst": catalyst,
-        "rs_3m": None if rs_3m is None else float(rs_3m),
-        "atr_contraction": bool(atr_contraction),
-        "model": "v2",
-    }
-
-
-def analyze_breakout_v3(
-    ticker,
-    df,
-    resolved_name=None,
-    benchmark_df=None,
-    min_rows=120,
-    signal_lookback=5,
-    max_runup_pct=None,
-    max_pullback_pct=None,
-    retest_days=0,
-    breakout_buffer_pct: float | None = None,
-    volume_spike_mult: float | None = None,
-    power_close_pos_min: float | None = None,
-    power_body_pct_min: float | None = None,
-    min_traded_value20: float | None = None,
-    require_rs_positive: bool = False,
-    require_atr_contraction: bool = False,
-    require_benchmark_trend: bool = False,
-):
-    if df is None or len(df) < min_rows:
-        return None
-
-    if len(df) >= 2:
-        try:
-            last_close = df["Close"].iloc[-1] if "Close" in df.columns else None
-            last_open = df["Open"].iloc[-1] if "Open" in df.columns else None
-            if (pd.isna(last_close) or pd.isna(last_open)):
-                df = df.iloc[:-1]
-            elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0 and not _is_today_kl(df.index[-1]):
-                df = df.iloc[:-1]
-        except Exception:
-            pass
-
-    if df is None or len(df) < min_rows:
-        return None
-
-    ticker = str(ticker).upper().strip()
-    df = df.copy()
-    for c in ["Open", "High", "Low", "Close", "Volume"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-
-    try:
-        current_close = float(df["Close"].iloc[-1])
-        if not (current_close > 0.0):
-            return None
-    except Exception:
-        return None
-
-    rsi = 50.0
-    try:
-        rsi_v = RSIIndicator(df["Close"], window=14).rsi().iloc[-1]
-        if rsi_v == rsi_v:
-            rsi = float(rsi_v)
-    except Exception:
-        pass
-
-    sma50 = sma200 = None
-    sma50_series = None
-    try:
-        sma50_series = SMAIndicator(df["Close"], window=50).sma_indicator()
-        sma50 = float(sma50_series.iloc[-1])
-        if len(df) >= 220:
-            sma200 = float(SMAIndicator(df["Close"], window=200).sma_indicator().iloc[-1])
-    except Exception:
-        pass
-
-    score = 0
-    score_max = 11
-
-    try:
-        if sma50 is not None and current_close > sma50:
-            sma50_prev = float(SMAIndicator(df["Close"], window=50).sma_indicator().iloc[-6])
-            if sma50_prev == sma50_prev and sma50 > sma50_prev:
-                score += 2
-    except Exception:
-        pass
-
-    try:
-        if sma200 is not None and current_close > sma200:
-            sma200_prev = float(SMAIndicator(df["Close"], window=200).sma_indicator().iloc[-6])
-            if sma200_prev == sma200_prev and sma200 > sma200_prev:
-                score += 2
-    except Exception:
-        pass
-
-    breakout_lookback = 55
-
-    breakout_candle = False
-    breakout_candle_valid = False
-    breakout_hold_ok = False
-    breakout_55 = False
-    power_candle = False
-    volume_spike = False
-    breakout_candle_ts = None
-    breakout_candle_close = None
-    breakout_candle_vol = None
-
-    liquidity_ok = False
-    try:
-        if "Volume" in df.columns and len(df) >= 30:
-            traded_value20 = float((df["Close"] * df["Volume"]).rolling(window=20).mean().shift(1).iloc[-1])
-            min_tv = 1_000_000.0
-            try:
-                if min_traded_value20 is not None and str(min_traded_value20).strip() != "":
-                    min_tv = float(min_traded_value20)
-            except Exception:
-                min_tv = 1_000_000.0
-            if traded_value20 >= float(min_tv):
-                liquidity_ok = True
-                score += 1
-    except Exception:
-        pass
-
-    try:
-        lookback_days = int(signal_lookback) if signal_lookback is not None else 5
-    except Exception:
-        lookback_days = 5
-    if lookback_days < 1:
-        lookback_days = 1
-    if lookback_days > 20:
-        lookback_days = 20
-    buf_pct = 0.0
-    try:
-        if breakout_buffer_pct is not None and str(breakout_buffer_pct).strip() != "":
-            buf_pct = float(breakout_buffer_pct)
-    except Exception:
-        buf_pct = 0.0
-    if buf_pct < 0:
-        buf_pct = 0.0
-    vol_mult = 1.8
-    try:
-        if volume_spike_mult is not None and str(volume_spike_mult).strip() != "":
-            vol_mult = float(volume_spike_mult)
-    except Exception:
-        vol_mult = 1.8
-    if vol_mult < 1.0:
-        vol_mult = 1.0
-    close_pos_min = 0.7
-    try:
-        if power_close_pos_min is not None and str(power_close_pos_min).strip() != "":
-            close_pos_min = float(power_close_pos_min)
-    except Exception:
-        close_pos_min = 0.7
-    if close_pos_min < 0.0:
-        close_pos_min = 0.0
-    if close_pos_min > 1.0:
-        close_pos_min = 1.0
-    body_pct_min = 0.55
-    try:
-        if power_body_pct_min is not None and str(power_body_pct_min).strip() != "":
-            body_pct_min = float(power_body_pct_min)
-    except Exception:
-        body_pct_min = 0.55
-    if body_pct_min < 0.0:
-        body_pct_min = 0.0
-    if body_pct_min > 1.0:
-        body_pct_min = 1.0
-
-    try:
-        if "Volume" in df.columns and len(df) >= (breakout_lookback + lookback_days + 1):
-            vols = pd.to_numeric(df["Volume"], errors="coerce")
-            avg20_prev = vols.rolling(window=20).mean().shift(1)
-
-            start_idx = len(df) - lookback_days
-            for i in range(len(df) - 1, start_idx - 1, -1):
-                if i < breakout_lookback or i < 20:
-                    continue
-                close_i = float(df["Close"].iloc[i])
-                open_i = float(df["Open"].iloc[i])
-                high_i = float(df["High"].iloc[i])
-                low_i = float(df["Low"].iloc[i])
-                if not (close_i > 0.0):
-                    continue
-
-                prior_close_high = float(df["Close"].iloc[i - breakout_lookback : i].max())
-                thr = float(prior_close_high)
-                if float(buf_pct) > 0.0:
-                    thr = float(prior_close_high) * (1.0 + (float(buf_pct) / 100.0))
-                is_breakout_55 = close_i > thr
-                if not is_breakout_55:
-                    continue
-
-                if sma50_series is not None:
-                    try:
-                        sma50_i = float(sma50_series.iloc[i])
-                        if sma50_i == sma50_i and not (close_i > sma50_i):
-                            continue
-                    except Exception:
-                        pass
-
-                is_power = False
-                try:
-                    if high_i > low_i:
-                        close_pos = (close_i - low_i) / (high_i - low_i)
-                        body_pct = abs(close_i - open_i) / (high_i - low_i)
-                        if close_i > open_i and close_pos >= float(close_pos_min) and body_pct >= float(body_pct_min):
-                            is_power = True
-                except Exception:
-                    is_power = False
-                if not is_power:
-                    continue
-
-                is_vol_spike = False
-                try:
-                    avg_i = float(avg20_prev.iloc[i])
-                    vol_i = float(vols.iloc[i])
-                    if avg_i > 0 and vol_i >= avg_i * float(vol_mult):
-                        is_vol_spike = True
-                except Exception:
-                    is_vol_spike = False
-                if not is_vol_spike:
-                    continue
-
-                breakout_candle = True
-                breakout_55 = True
-                power_candle = True
-                volume_spike = True
-                breakout_candle_ts = df.index[i]
-                breakout_candle_close = close_i
-                try:
-                    breakout_candle_vol = float(vols.iloc[i])
-                except Exception:
-                    breakout_candle_vol = None
-                break
-    except Exception:
-        pass
-
-    runup_pct = None
-    try:
-        if breakout_candle and breakout_candle_close is not None and breakout_candle_close > 0:
-            runup_pct = ((float(current_close) / float(breakout_candle_close)) - 1.0) * 100.0
-    except Exception:
-        runup_pct = None
-
-    max_runup_val = None
-    try:
-        if max_runup_pct is not None and str(max_runup_pct).strip() != "":
-            max_runup_val = float(max_runup_pct)
-    except Exception:
-        max_runup_val = None
-
-    max_pullback_val = None
-    try:
-        if max_pullback_pct is not None and str(max_pullback_pct).strip() != "":
-            max_pullback_val = float(max_pullback_pct)
-    except Exception:
-        max_pullback_val = None
-
-    if breakout_candle:
-        if max_pullback_val is None or (runup_pct is not None and runup_pct >= -max_pullback_val):
-            breakout_hold_ok = True
-
-    if breakout_candle:
-        if breakout_hold_ok and (max_runup_val is None or (runup_pct is not None and runup_pct <= max_runup_val)):
-            breakout_candle_valid = True
-            score += 1
-    else:
-        try:
-            if len(df) >= breakout_lookback + 5:
-                prior_high = float(df["Close"].iloc[-breakout_lookback:-1].max())
-                thr = float(prior_high)
-                if float(buf_pct) > 0.0:
-                    thr = float(prior_high) * (1.0 + (float(buf_pct) / 100.0))
-                if current_close > thr:
-                    breakout_55 = True
-                    score += 2
-        except Exception:
-            pass
-
-        try:
-            o = float(df["Open"].iloc[-1])
-            h = float(df["High"].iloc[-1])
-            l = float(df["Low"].iloc[-1])
-            if h > l:
-                close_pos = (current_close - l) / (h - l)
-                if close_pos >= 0.7:
-                    score += 1
-        except Exception:
-            pass
-
-        try:
-            if "Volume" in df.columns and len(df) >= 30:
-                current_vol = float(df["Volume"].iloc[-1])
-                avg_vol20 = float(df["Volume"].rolling(window=20).mean().shift(1).iloc[-1])
-                if avg_vol20 > 0 and current_vol >= avg_vol20 * 1.8:
-                    score += 1
-        except Exception:
-            pass
-
-    rs_3m = None
-    try:
-        if benchmark_df is not None and not benchmark_df.empty:
-            s = df["Close"].copy()
-            b = benchmark_df["Close"].copy() if "Close" in benchmark_df.columns else None
-            if b is not None:
-                join = pd.concat([s, b], axis=1, join="inner").dropna()
-                if len(join) >= 70:
-                    s_now = float(join.iloc[-1, 0])
-                    s_prev = float(join.iloc[-64, 0])
-                    b_now = float(join.iloc[-1, 1])
-                    b_prev = float(join.iloc[-64, 1])
-                    if s_prev > 0 and b_prev > 0:
-                        rs_3m = (s_now / s_prev) - (b_now / b_prev)
-                        if rs_3m > 0:
-                            score += 1
-    except Exception:
-        pass
-    if bool(require_rs_positive):
-        try:
-            if rs_3m is None or not (float(rs_3m) > 0.0):
-                return None
-        except Exception:
-            return None
-
-    bench_trend_ok = None
-    if bool(require_benchmark_trend):
-        try:
-            if benchmark_df is not None and not benchmark_df.empty and "Close" in benchmark_df.columns:
-                b = pd.to_numeric(benchmark_df["Close"], errors="coerce").dropna()
-                if len(b) >= 60:
-                    sma_b = SMAIndicator(b, window=50).sma_indicator()
-                    b_now = float(b.iloc[-1])
-                    sma_now = float(sma_b.iloc[-1])
-                    sma_prev = float(sma_b.iloc[-6])
-                    bench_trend_ok = bool(b_now > sma_now and sma_now > sma_prev)
-        except Exception:
-            bench_trend_ok = None
-        if bench_trend_ok is False:
-            return None
-
-    atr_contraction = False
-    try:
-        if len(df) >= 40:
-            prev_close = df["Close"].shift(1)
-            tr = pd.concat(
-                [
-                    (df["High"] - df["Low"]).abs(),
-                    (df["High"] - prev_close).abs(),
-                    (df["Low"] - prev_close).abs(),
-                ],
-                axis=1,
-            ).max(axis=1)
-            atr14 = tr.rolling(window=14).mean()
-            atr_pct = atr14 / df["Close"]
-            recent = float(pd.to_numeric(atr_pct.tail(5), errors="coerce").dropna().mean())
-            prior = float(pd.to_numeric(atr_pct.iloc[-25:-5], errors="coerce").dropna().mean())
-            if prior > 0 and recent > 0 and recent <= prior * 0.8:
-                atr_contraction = True
-                score += 1
-    except Exception:
-        pass
-    if bool(require_atr_contraction) and (not bool(atr_contraction)):
-        return None
-
-    code, name, sector, analysis, catalyst = _resolve_insight_v3(ticker, resolved_name)
-
-    breakout_candle_date = None
-    breakout_candle_age = None
-    if breakout_candle_ts is not None:
-        try:
-            breakout_candle_date = pd.Timestamp(breakout_candle_ts).date().isoformat()
-            breakout_candle_age = int(len(df) - 1 - df.index.get_loc(breakout_candle_ts))
-        except Exception:
-            breakout_candle_date = None
-            breakout_candle_age = None
-
-    retest_days_i = 0
-    try:
-        retest_days_i = int(retest_days) if retest_days is not None else 0
-    except Exception:
-        retest_days_i = 0
-    if retest_days_i < 0:
-        retest_days_i = 0
-    if retest_days_i > 20:
-        retest_days_i = 20
-
-    retest_confirmed = False
-    retest_touch_ts = None
-    retest_vol_ok = None
-    if breakout_candle and breakout_candle_ts is not None and breakout_candle_close is not None and retest_days_i > 0:
-        try:
-            i0 = int(df.index.get_loc(breakout_candle_ts))
-            i1 = min(len(df) - 1, i0 + retest_days_i)
-            if i1 >= i0 + 1:
-                level = float(breakout_candle_close)
-                hold_pct = 0.0 if max_pullback_val is None else float(max_pullback_val)
-                hold_floor = level * (1.0 - (hold_pct / 100.0))
-                touch_ceiling = level * 1.01
-                for j in range(i0 + 1, i1 + 1):
-                    low_j = float(df["Low"].iloc[j])
-                    close_j = float(df["Close"].iloc[j])
-                    if low_j <= touch_ceiling and close_j >= hold_floor:
-                        retest_touch_ts = df.index[j]
-                        if breakout_candle_vol is not None:
-                            try:
-                                vj = float(df["Volume"].iloc[j])
-                                retest_vol_ok = bool(vj <= breakout_candle_vol * 0.9)
-                            except Exception:
-                                retest_vol_ok = None
-                        retest_confirmed = True if (retest_vol_ok is None or retest_vol_ok) else False
-                        break
-        except Exception:
-            retest_confirmed = False
-
-    retest_touch_date = None
-    if retest_touch_ts is not None:
-        try:
-            retest_touch_date = pd.Timestamp(retest_touch_ts).date().isoformat()
-        except Exception:
-            retest_touch_date = None
-
-    breakout_level = None
-    distance_to_breakout_pct = None
-    near_breakout = False
-    try:
-        if len(df) >= breakout_lookback + 5:
-            prior_high = float(df["Close"].iloc[-breakout_lookback:-1].max())
-            thr = float(prior_high)
-            if float(buf_pct) > 0.0:
-                thr = float(prior_high) * (1.0 + (float(buf_pct) / 100.0))
-            if thr > 0.0:
-                breakout_level = float(thr)
-                distance_to_breakout_pct = ((float(current_close) / float(breakout_level)) - 1.0) * 100.0
-                if (not bool(breakout_candle_valid)) and (not bool(retest_confirmed)) and (not bool(breakout_55)):
-                    if float(distance_to_breakout_pct) < 0.0 and float(distance_to_breakout_pct) >= -1.0:
-                        near_breakout = True
-    except Exception:
-        breakout_level = None
-        distance_to_breakout_pct = None
-        near_breakout = False
-
-    return {
-        "ticker": ticker,
-        "code": code,
-        "name": name,
-        "sector": sector,
-        "price": float(round(float(current_close), 3)),
-        "rsi": float(round(float(rsi), 2)),
-        "score": int(score),
-        "score_max": int(score_max),
-        "analysis": analysis,
-        "catalyst": catalyst,
-        "rs_3m": None if rs_3m is None else float(rs_3m),
-        "atr_contraction": bool(atr_contraction),
-        "bench_trend_ok": None if bench_trend_ok is None else bool(bench_trend_ok),
-        "breakout_55": bool(breakout_55),
-        "power_candle": bool(power_candle),
-        "volume_spike": bool(volume_spike),
-        "liquidity_ok": bool(liquidity_ok),
-        "breakout_candle": bool(breakout_candle),
-        "breakout_candle_valid": bool(breakout_candle_valid),
-        "breakout_hold_ok": bool(breakout_hold_ok),
-        "breakout_candle_date": breakout_candle_date,
-        "breakout_candle_age": breakout_candle_age,
-        "signal_lookback": int(lookback_days),
-        "breakout_candle_close": None if breakout_candle_close is None else float(breakout_candle_close),
-        "breakout_candle_vol": None if breakout_candle_vol is None else float(breakout_candle_vol),
-        "runup_pct": None if runup_pct is None else float(runup_pct),
-        "max_runup_pct": None if max_runup_val is None else float(max_runup_val),
-        "max_pullback_pct": None if max_pullback_val is None else float(max_pullback_val),
-        "retest_days": int(retest_days_i),
-        "retest_confirmed": bool(retest_confirmed),
-        "retest_touch_date": retest_touch_date,
-        "retest_vol_ok": None if retest_vol_ok is None else bool(retest_vol_ok),
-        "breakout_level": None if breakout_level is None else float(breakout_level),
-        "distance_to_breakout_pct": None if distance_to_breakout_pct is None else float(distance_to_breakout_pct),
-        "near_breakout": bool(near_breakout),
-        "model": "v3",
-    }
-
-
-def analyze_breakout_v3_intraday(ticker: str, daily_df: pd.DataFrame, intraday_df: pd.DataFrame, resolved_name: str | None = None, max_runup_pct: float | None = 5.0, min_intraday_bars: int = 40, lookback_bars: int | None = 60):
-    if daily_df is None or daily_df.empty or intraday_df is None or intraday_df.empty:
-        return None
-
-    try:
-        if len(intraday_df) < int(min_intraday_bars):
-            return None
-    except Exception:
-        return None
-
-    ticker = str(ticker or "").upper().strip()
-    df_d = daily_df.copy()
-    df_i = intraday_df.copy()
-    for c in ["Open", "High", "Low", "Close", "Volume"]:
-        if c in df_d.columns:
-            df_d[c] = pd.to_numeric(df_d[c], errors="coerce")
-        if c in df_i.columns:
-            df_i[c] = pd.to_numeric(df_i[c], errors="coerce")
-    df_d = df_d.dropna(subset=["Close"]).copy()
-    df_i = df_i.dropna(subset=["Close"]).copy()
-    if df_d.empty or df_i.empty:
-        return None
-
-    breakout_lookback = 55
-    if len(df_d) < breakout_lookback + 5:
-        return None
-    try:
-        breakout_level = float(df_d["Close"].iloc[-breakout_lookback:-1].max())
-        if not (breakout_level > 0.0):
-            return None
-    except Exception:
-        return None
-
-    max_run = None
-    try:
-        if max_runup_pct is not None and str(max_runup_pct).strip() != "":
-            max_run = float(max_runup_pct)
-    except Exception:
-        max_run = None
-
-    try:
-        n = int(lookback_bars) if lookback_bars is not None else 60
-        if n < 10:
-            n = 10
-        if n > len(df_i):
-            n = len(df_i)
-        df_scan = df_i.tail(n).copy()
-    except Exception:
-        return None
-
-    vol_avg_prev = None
-    try:
-        if "Volume" in df_scan.columns:
-            vols = pd.to_numeric(df_scan["Volume"], errors="coerce")
-            vol_avg_prev = vols.rolling(window=20).mean().shift(1)
-    except Exception:
-        vol_avg_prev = None
-
-    best = None
-    best_score = None
-    for ts, row in df_scan.iterrows():
-        try:
-            o = float(row["Open"])
-            h = float(row["High"])
-            l = float(row["Low"])
-            c = float(row["Close"])
-        except Exception:
-            continue
-        if not (c > 0.0):
-            continue
-        if not (c > breakout_level):
-            continue
-
-        runup_pct = ((c / breakout_level) - 1.0) * 100.0
-        if max_run is not None:
-            try:
-                if float(runup_pct) > float(max_run):
-                    continue
-            except Exception:
-                pass
-
-        power_candle = False
-        try:
-            if h > l:
-                close_pos = (c - l) / (h - l)
-                body_pct = abs(c - o) / (h - l)
-                if c > o and close_pos >= 0.6 and body_pct >= 0.4:
-                    power_candle = True
-        except Exception:
-            power_candle = False
-
-        volume_spike = False
-        v = 0.0
-        try:
-            if "Volume" in row and row.get("Volume") is not None:
-                v = float(row.get("Volume") or 0.0)
-        except Exception:
-            v = 0.0
-        try:
-            if vol_avg_prev is not None:
-                avg20_prev = vol_avg_prev.loc[ts]
-                if avg20_prev is not None and not pd.isna(avg20_prev):
-                    a = float(avg20_prev)
-                    if a > 0.0 and v >= a * 1.5:
-                        volume_spike = True
-        except Exception:
-            volume_spike = False
-
-        if not (power_candle or volume_spike):
-            continue
-
-        score = 0.0
-        score += 2.0 if power_candle else 0.0
-        score += 2.0 if volume_spike else 0.0
-        try:
-            score += max(0.0, 2.0 - float(runup_pct) / 2.5)
-        except Exception:
-            pass
-
-        if best_score is None or score > float(best_score):
-            best_score = float(score)
-            best = {
-                "ts": ts,
-                "close": float(c),
-                "runup_pct": float(runup_pct),
-                "power_candle": bool(power_candle),
-                "volume_spike": bool(volume_spike),
-            }
-
-    if not best:
-        return None
-
-    c = float(best["close"])
-    ts = best["ts"]
-    runup_pct = float(best["runup_pct"])
-    power_candle = bool(best["power_candle"])
-    volume_spike = bool(best["volume_spike"])
-
-    code, name, sector, analysis, catalyst = _resolve_insight_v3(ticker, resolved_name)
-    score = 0
-    score_max = 7
-    score += 2 if power_candle else 0
-    score += 2 if volume_spike else 0
-    score += 1
-    score += 1 if max_run is None or runup_pct <= max_run else 0
-    score += 1
-
-    return {
-        "ticker": ticker,
-        "name": name,
-        "sector": sector,
-        "price": float(c),
-        "rsi": 50.0,
-        "score": int(score),
-        "score_max": int(score_max),
-        "breakout_55": True,
-        "breakout_candle": True,
-        "breakout_candle_valid": True,
-        "breakout_hold_ok": True,
-        "runup_pct": float(runup_pct),
-        "max_runup_pct": None if max_run is None else float(max_run),
-        "max_pullback_pct": None,
-        "retest_days": 0,
-        "retest_confirmed": False,
-        "breakout_candle_date": pd.Timestamp(ts).date().isoformat(),
-        "breakout_candle_age": 0,
-        "breakout_level": float(breakout_level),
-        "power_candle": bool(power_candle),
-        "volume_spike": bool(volume_spike),
-        "liquidity_ok": True,
-        "analysis": analysis,
-        "catalyst": catalyst,
-        "model": "v3i",
-    }
-
-
-
-# --- KLCI COMPONENTS (Top 30 Stocks) ---
-KLCI_COMPONENTS = [
-    "1155.KL", "1295.KL", "1023.KL", "5347.KL", "5183.KL", 
-    "5225.KL", "6947.KL", "6888.KL", "6012.KL", "5819.KL",
-    "8869.KL", "6033.KL", "3816.KL", "1066.KL", "4707.KL",
-    "1961.KL", "2445.KL", "4065.KL", "3182.KL", "4715.KL",
-    "7277.KL", "4197.KL", "5285.KL", "5681.KL", "1015.KL",
-    "1082.KL", "0166.KL", "5296.KL", "5246.KL", "4677.KL"
-]
-
-KLCI_AUTO_UPDATE_ENABLED = True
-KLCI_COMPONENTS_AUTO_FILE = os.path.join(os.path.dirname(__file__), "klci_components_auto.txt")
-
-INDEX_AUTO_UPDATE_ENABLED = True
-INDEX_FORCE_REFRESH = False
-INDEX_COMPONENTS_CACHE_DIR = os.path.join(os.path.dirname(__file__), "index_components_cache")
-try:
-    os.makedirs(INDEX_COMPONENTS_CACHE_DIR, exist_ok=True)
-except Exception:
-    pass
-
-PRICE_CACHE_DIR = os.path.join(os.path.dirname(__file__), "price_cache")
-PRICE_CACHE_MODE = "fast"  # fast|latest|offline
-PRICE_CACHE_MAX_AGE_SECONDS = 15 * 60
-try:
-    os.makedirs(PRICE_CACHE_DIR, exist_ok=True)
-except Exception:
-    pass
-
-
-def _price_cache_path(ticker: str) -> str:
-    safe = re.sub(r"[^A-Z0-9._-]+", "_", str(ticker or "").upper())
-    return os.path.join(PRICE_CACHE_DIR, f"{safe}.csv")
-
-
-def _read_price_cache(ticker: str) -> tuple[pd.DataFrame | None, dict | None]:
-    try:
-        path = _price_cache_path(ticker)
-        if not os.path.exists(path):
-            return None, None
-        df = pd.read_csv(path)
-        if "Date" not in df.columns:
-            return None, None
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        df = df.dropna(subset=["Date"]).set_index("Date").sort_index()
-        meta = {"path": path, "mtime": os.path.getmtime(path)}
-        return df, meta
-    except Exception:
-        return None, None
-
-
-def _write_price_cache(ticker: str, df: pd.DataFrame) -> None:
-    try:
-        if df is None or df.empty:
-            return
-        path = _price_cache_path(ticker)
-        out = df.copy()
-        out = out[[c for c in ["Open", "High", "Low", "Close", "Volume"] if c in out.columns]]
-        out = out.dropna(subset=["Close"]).tail(2000)
-        out = out.reset_index().rename(columns={out.index.name or "index": "Date"})
-        out.to_csv(path, index=False)
-    except Exception:
-        return
-
-
-def _read_text_lines(path: str) -> list[str]:
-    try:
-        if not path or not os.path.exists(path):
-            return []
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            return [line.strip() for line in f.readlines()]
-    except Exception:
-        return []
-
-
-def _write_text_lines(path: str, lines: list[str]) -> bool:
-    try:
-        if not path:
-            return False
-        with open(path, "w", encoding="utf-8") as f:
-            for line in lines:
-                f.write(f"{line}\n")
-        return True
-    except Exception:
-        return False
-
-
-def _normalize_kl_ticker(x: str) -> str | None:
-    try:
-        s = str(x).strip().upper()
-        if not s:
-            return None
-        s = s.replace(" ", "")
-        if s.endswith(".KL"):
-            s = s[:-3]
-        if s.isdigit() and len(s) == 4:
-            return f"{s}.KL"
-        return None
-    except Exception:
-        return None
-
-
-def _normalize_bm_code(x: str) -> str | None:
-    try:
-        s = str(x).strip().upper().replace(" ", "")
-        if not s:
-            return None
-        if s.endswith(".KL"):
-            s = s[:-3]
-        if s.isdigit() and len(s) == 4:
-            return s
-        return None
-    except Exception:
-        return None
-
-
-def _extract_kl_codes_from_text(text: str) -> list[str]:
-    try:
-        if not text:
-            return []
-        codes = re.findall(r"\b(\d{4})\.KL\b", text.upper())
-        return sorted({f"{c}.KL" for c in codes})
-    except Exception:
-        return []
-
-
-def _resolve_tradingview_symbol_to_kl(ticker_symbol: str, company_name: str | None = None) -> str | None:
-    try:
-        sym = str(ticker_symbol or "").strip().upper()
-        if not sym:
-            return None
-        code = _normalize_bm_code(sym)
-        if code:
-            return f"{code}.KL"
-
-        if company_name:
-            m = _best_ticker_match_by_name(company_name)
-            if m:
-                return m
-
-        t = search_bursa(sym)
-        if t:
-            return t
-        if company_name:
-            t = search_bursa(company_name)
-            if t:
-                return t
-        return None
-    except Exception:
-        return None
-
-
-def _fetch_investingmalaysia_index_tickers(slug: str, max_pages: int = 12, max_seconds: float = 25.0) -> list[str]:
-    try:
-        t0 = time.time() if 'time' in globals() else None
-        base = f"https://investingmalaysia.com/category/ftse-bursa-malaysia-index/{slug}/"
-        headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
-        all_codes = set()
-        for p in range(1, int(max_pages) + 1):
-            if t0 is not None and (time.time() - t0) > float(max_seconds):
-                break
-            url = base if p == 1 else base + f"page/{p}/"
-            try:
-                r = requests.get(url, headers=headers, timeout=25)
-                if r.status_code != 200:
-                    break
-                html = r.text or ""
-            except Exception:
-                break
-
-            found = set(re.findall(r"/stock/[^/]+-(\d{4})/", html))
-            if not found:
-                break
-            before = len(all_codes)
-            all_codes |= found
-            if len(all_codes) == before:
-                break
-        tickers = sorted({f"{c}.KL" for c in all_codes if c and str(c).isdigit() and len(str(c)) == 4})
-        return tickers
-    except Exception:
-        return []
-
-
-def refresh_index_components(index_key: str, force: bool = False, max_age_days: int = 30, allow_network: bool = True) -> tuple[list[str], str]:
-    key = str(index_key or "").lower().strip()
-    defs = {
-        "fbm70": {
-            "slug": "fbm-mid-70",
-            "min": 50,
-            "max": 130,
-            "pages": 8,
-        },
-        "fbm100": {
-            "slug": "fbm-top-100",
-            "min": 70,
-            "max": 160,
-            "pages": 8,
-        },
-        "smallcap": {
-            "slug": "fbm-small-cap",
-            "min": 50,
-            "max": 400,
-            "pages": 10,
-        },
-    }
-    if key not in defs:
-        return [], "unknown"
-
-    cache_file = os.path.join(INDEX_COMPONENTS_CACHE_DIR, f"{key}.txt")
-
-    cached_any = []
-    if os.path.exists(cache_file):
-        try:
-            cached_any = [_normalize_kl_ticker(x) for x in _read_text_lines(cache_file)]
-            cached_any = sorted({x for x in cached_any if x})
-            if not (defs[key]["min"] <= len(cached_any) <= defs[key]["max"]):
-                cached_any = []
-        except Exception:
-            cached_any = []
-
-    try:
-        if not bool(allow_network):
-            if cached_any:
-                return cached_any, "cache"
-            return [], "cache-missing"
-    except Exception:
-        if cached_any:
-            return cached_any, "cache"
-        return [], "cache-missing"
-
-    try:
-        if not force and os.path.exists(cache_file):
-            try:
-                age_s = (pd.Timestamp.now() - pd.Timestamp.fromtimestamp(os.path.getmtime(cache_file))).total_seconds()
-                if age_s < float(max_age_days) * 86400.0:
-                    cached = [_normalize_kl_ticker(x) for x in _read_text_lines(cache_file)]
-                    cached = sorted({x for x in cached if x})
-                    if defs[key]["min"] <= len(cached) <= defs[key]["max"]:
-                        return cached, "cache"
-            except Exception:
-                pass
-
-        resolved = _fetch_investingmalaysia_index_tickers(defs[key]["slug"], max_pages=int(defs[key].get("pages") or 10), max_seconds=25.0)
-        resolved = sorted({_normalize_kl_ticker(x) for x in resolved if _normalize_kl_ticker(x)})
-        if defs[key]["min"] <= len(resolved) <= defs[key]["max"]:
-            _write_text_lines(cache_file, [t.replace(".KL", "") for t in resolved])
-            return resolved, "investingmalaysia"
-        if cached_any:
-            return cached_any, "cache-fallback"
-        return [], "investingmalaysia"
-    except Exception:
-        if cached_any:
-            return cached_any, "cache-fallback"
-        return [], "error"
-
-
-def get_index_components_info(index_key: str, max_age_days: int = 30) -> dict:
-    key = str(index_key or "").lower().strip()
-    cache_file = os.path.join(INDEX_COMPONENTS_CACHE_DIR, f"{key}.txt")
-    try:
-        tickers, src = refresh_index_components(key, force=False, max_age_days=max_age_days, allow_network=bool(INDEX_AUTO_UPDATE_ENABLED))
-        updated = None
-        if os.path.exists(cache_file):
-            try:
-                updated = pd.Timestamp.fromtimestamp(os.path.getmtime(cache_file)).isoformat()
-            except Exception:
-                updated = None
-        return {"tickers": tickers, "source": src, "updated_at": updated}
-    except Exception:
-        return {"tickers": [], "source": "error", "updated_at": None}
-
-
-def _find_tickers_by_name_keywords(keywords: list[str], max_hits: int = 80) -> list[str]:
-    out = []
-    try:
-        kw = [str(k).strip().upper() for k in (keywords or []) if str(k).strip()]
-        if not kw:
-            return []
-
-        kw_items = []
-        for k in kw:
-            toks = _name_tokens(k)
-            kw_items.append((k, toks))
-
-        def _match(name: str) -> bool:
-            name_u = str(name or "").upper()
-            name_toks = _name_tokens(name_u)
-            for raw, toks in kw_items:
-                if len(raw) <= 3:
-                    if raw in name_toks:
-                        return True
-                    continue
-                if toks and toks.issubset(name_toks):
-                    return True
-                if raw and raw in name_u:
-                    return True
-            return False
-
-        name_map = {}
-        try:
-            name_map = _load_auto_universe_name_map()
-        except Exception:
-            name_map = {}
-
-        if name_map:
-            for t, n in name_map.items():
-                if _match(n):
-                    out.append(str(t).upper())
-                    if len(out) >= max_hits:
-                        break
-
-        if len(out) < max_hits:
-            for t, v in MARKET_INSIGHTS.items():
-                if _match(v.get("name") or ""):
-                    out.append(str(t).upper())
-                    if len(out) >= max_hits:
-                        break
-
-        out = sorted({_normalize_kl_ticker(x) for x in out if _normalize_kl_ticker(x)})
-        return out
-    except Exception:
-        return sorted({_normalize_kl_ticker(x) for x in out if _normalize_kl_ticker(x)})
-
-
-def _top100_membership_set(max_age_days: int = 30) -> set[str]:
-    try:
-        fbm100, _ = refresh_index_components("fbm100", force=False, max_age_days=max_age_days, allow_network=bool(INDEX_AUTO_UPDATE_ENABLED))
-        fbm100 = [str(x).upper().strip() for x in (fbm100 or []) if x]
-        if len(fbm100) >= 70:
-            return set(fbm100)
-    except Exception:
-        pass
-
-    s = set()
-    try:
-        s |= set(refresh_klci_components(force=False, max_age_days=max_age_days)[0] or [])
-    except Exception:
-        s |= set(list(KLCI_COMPONENTS))
-    try:
-        fbm70, _ = refresh_index_components("fbm70", force=False, max_age_days=max_age_days, allow_network=bool(INDEX_AUTO_UPDATE_ENABLED))
-        if fbm70:
-            s |= set(fbm70)
-    except Exception:
-        pass
-    if s:
-        out = {str(x).upper().strip() for x in s if x}
-        if len(out) >= 40:
-            return out
-
-    try:
-        curated = set(STOCK_DISCOVERY_UNIVERSE)
-        curated = {str(x).upper().strip() for x in curated if x}
-        if curated:
-            return curated
-    except Exception:
-        pass
-
-    return {str(x).upper().strip() for x in list(KLCI_COMPONENTS)}
-
-
-def _filter_to_large_mid(tickers: list[str]) -> list[str]:
-    u = [str(x).upper().strip() for x in (tickers or []) if _normalize_kl_ticker(x)]
-    u = [x for x in u if x]
-    membership = set()
-    try:
-        membership |= _top100_membership_set(max_age_days=30)
-    except Exception:
-        membership |= {str(x).upper().strip() for x in list(KLCI_COMPONENTS)}
-    try:
-        membership |= {str(x).upper().strip() for x in MARKET_INSIGHTS.keys()}
-    except Exception:
-        pass
-    if not membership:
-        return sorted(set(u))
-    return sorted({t for t in u if t in membership})
-
-
-def get_sector_large_cap_universe(mode: str) -> tuple[list[str], str]:
-    m = str(mode or "").lower().strip()
-    pinned = {
-        "sector-tech": [
-            "0097.KL",
-            "0128.KL",
-            "0166.KL",
-            "0208.KL",
-            "3867.KL",
-            "4456.KL",
-            "5005.KL",
-            "5286.KL",
-            "5292.KL",
-            "7204.KL",
-            "7471.KL",
-            "9334.KL",
-        ],
-        "sector-utilities": ["5347.KL", "6742.KL", "4677.KL", "5209.KL", "5264.KL"],
-        "sector-infra": ["5398.KL", "3336.KL", "7277.KL", "3816.KL", "5246.KL"],
-        "sector-property": ["5227.KL", "5212.KL", "5211.KL", "5176.KL", "5288.KL", "5263.KL", "5148.KL"],
-        "sector-consumer": ["4707.KL", "2836.KL", "3255.KL", "3689.KL", "7084.KL", "5296.KL", "4065.KL"],
-        "sector-banks": ["1155.KL", "1023.KL", "1295.KL", "1066.KL", "5819.KL", "2488.KL", "5258.KL", "5185.KL"],
-        "sector-healthcare": ["5225.KL", "5878.KL", "5168.KL", "7113.KL", "7153.KL", "7106.KL"],
-        "sector-energy": ["5681.KL", "6033.KL", "5183.KL", "5210.KL", "5141.KL", "5199.KL"],
-        "sector-plantation": ["5285.KL", "2445.KL", "1961.KL", "2291.KL", "2089.KL", "5012.KL"],
-        "sector-telco": ["4863.KL", "6012.KL", "5031.KL", "6399.KL", "6888.KL"],
-        "sector-industrial": ["8869.KL", "4731.KL", "3794.KL", "9822.KL", "8125.KL"],
-    }
-    presets = {
-        "sector-tech": [
-            "INARI",
-            "VITROX",
-            "MALAYSIAN PACIFIC",
-            "UNISEM",
-            "GREATECH",
-            "D&O",
-            "D&O GREEN",
-            "DNEX",
-            "FRONTKEN",
-            "UWC",
-            "MI TECHNOVATION",
-            "KOBAY",
-        ],
-        "sector-utilities": ["YTL", "YTL POWER", "TENAGA", "MALAKOFF", "RANHILL", "GAS MALAYSIA"],
-        "sector-infra": ["IJM", "GAMUDA", "DIALOG", "MISC", "WESTPORTS"],
-        "sector-property": ["IGB REIT", "PAVILION REIT", "SUNWAY", "SUNWAY REIT", "IOI PROPERTIES", "SIME DARBY PROPERTY", "UEM SUNRISE", "SP SETIA"],
-        "sector-consumer": ["HEINEKEN", "CARLSBERG", "NESTLE", "QL", "MR DIY", "PPB", "FRASER"],
-        "sector-banks": ["MAYBANK", "MALAYAN BANKING", "CIMB", "PUBLIC BANK", "RHB", "HONG LEONG BANK", "AMMB", "AFFIN", "BANK ISLAM"],
-        "sector-healthcare": ["IHH", "KPJ", "PHARMANIAGA", "DUOPHARMA", "HARTALEGA", "TOP GLOVE", "KOSSAN", "SUPERMAX"],
-        "sector-energy": ["PETDAG", "PETRONAS DAGANGAN", "PETGAS", "PETRONAS GAS", "PCHEM", "PETRONAS CHEMICALS", "ARMADA", "DAYANG", "HIBISCUS"],
-        "sector-plantation": ["SIME DARBY PLANTATION", "FGV", "IOI CORP", "KLK", "GENTING PLANTATION", "UNITED PLANTATIONS", "TA ANN"],
-        "sector-telco": ["TELEKOM MALAYSIA", "MAXIS", "CELCOMDIGI", "TIME DOTCOM", "ASTRO"],
-        "sector-industrial": ["PRESS METAL", "SCIENTEX", "SAM ENGINEERING", "MALAYAN CEMENT", "LCTITAN"],
-    }
-    if m not in presets:
-        return [], "unknown"
-    u = _find_tickers_by_name_keywords(presets[m], max_hits=250)
-
-    keep = set(_filter_to_large_mid(u))
-    for t in pinned.get(m, []):
-        nt = _normalize_kl_ticker(t)
-        if nt:
-            keep.add(nt)
-    u = sorted(keep)
-    return u, m
-
-
-def _fetch_klci_from_yahoo() -> list[str]:
-    try:
-        url = "https://finance.yahoo.com/quote/%5EKLSE/components"
-        r = requests.get(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-            timeout=25,
-        )
-        if r.status_code != 200:
-            return []
-        tickers = _extract_kl_codes_from_text(r.text)
-        if 25 <= len(tickers) <= 40:
-            return tickers
-        return []
-    except Exception:
-        return []
-
-
-def _fetch_klci_from_wikipedia() -> list[str]:
-    try:
-        from bs4 import BeautifulSoup
-
-        url = "https://en.wikipedia.org/wiki/FTSE_Bursa_Malaysia_KLCI"
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=25)
-        if r.status_code != 200:
-            return []
-        soup = BeautifulSoup(r.text, "html.parser")
-        anchor = soup.find(id="Constituents")
-        if not anchor:
-            return []
-        table = anchor.find_parent().find_next("table", class_="wikitable")
-        if not table:
-            return []
-        header_row = table.find("tr")
-        headers = [th.get_text(" ", strip=True).lower() for th in header_row.find_all("th")] if header_row else []
-        code_idx = None
-        for i, h in enumerate(headers):
-            if "code" in h or "stock code" in h or "ticker" in h or "symbol" in h:
-                code_idx = i
-                break
-        if code_idx is None:
-            return []
-
-        out = []
-        for row in table.find_all("tr")[1:]:
-            cells = row.find_all(["td", "th"])
-            if not cells or len(cells) <= code_idx:
-                continue
-            cell_text = cells[code_idx].get_text(" ", strip=True)
-            m = re.search(r"\b(\d{4})\b", str(cell_text))
-            if not m:
-                continue
-            out.append(f"{m.group(1)}.KL")
-
-        out = sorted(set(out))
-        if 25 <= len(out) <= 40:
-            return out
-        return []
-    except Exception:
-        return []
-
-
-def refresh_klci_components(force: bool = False, max_age_days: int = 30) -> tuple[list[str], str]:
-    try:
-        if not force and os.path.exists(KLCI_COMPONENTS_AUTO_FILE):
-            try:
-                age_s = (pd.Timestamp.now() - pd.Timestamp.fromtimestamp(os.path.getmtime(KLCI_COMPONENTS_AUTO_FILE))).total_seconds()
-                if age_s < float(max_age_days) * 86400.0:
-                    cached = [_normalize_kl_ticker(x) for x in _read_text_lines(KLCI_COMPONENTS_AUTO_FILE)]
-                    cached = [x for x in cached if x]
-                    if 25 <= len(cached) <= 40:
-                        return cached, "cache"
-            except Exception:
-                pass
-
-        for src, fn in [("yahoo", _fetch_klci_from_yahoo), ("wikipedia", _fetch_klci_from_wikipedia)]:
-            u = fn() or []
-            u = [_normalize_kl_ticker(x) for x in u]
-            u = [x for x in u if x]
-            u = sorted(set(u))
-            if 25 <= len(u) <= 40:
-                _write_text_lines(KLCI_COMPONENTS_AUTO_FILE, [t.replace(".KL", "") for t in u])
-                return u, src
-
-        return list(KLCI_COMPONENTS), "static"
-    except Exception:
-        return list(KLCI_COMPONENTS), "static"
-
-
-def get_klci_components_info(max_age_days: int = 30) -> dict:
-    try:
-        tickers, src = refresh_klci_components(force=False, max_age_days=max_age_days)
-        updated = None
-        if os.path.exists(KLCI_COMPONENTS_AUTO_FILE):
-            try:
-                updated = pd.Timestamp.fromtimestamp(os.path.getmtime(KLCI_COMPONENTS_AUTO_FILE)).isoformat()
-            except Exception:
-                updated = None
-        return {"tickers": tickers, "source": src, "updated_at": updated}
-    except Exception:
-        return {"tickers": list(KLCI_COMPONENTS), "source": "static", "updated_at": None}
-
-STOCK_DISCOVERY_UNIVERSE = sorted(
-    set(
-        KLCI_COMPONENTS
-        + [
-            k
-            for k in MARKET_INSIGHTS.keys()
-            if isinstance(k, str) and k.upper().endswith(".KL")
-        ]
-    )
-)
-
-BURSA_UNIVERSE_FILE = os.path.join(os.path.dirname(__file__), "bursa_universe.csv")
-BURSA_UNIVERSE_AUTO_FILE = os.path.join(os.path.dirname(__file__), "bursa_universe_auto.csv")
-BURSA_UNIVERSE_XLSX_FILE = os.path.join(os.path.dirname(__file__), "List_of_Companies.xlsx")
-
-_AUTO_UNIVERSE_NAME_CACHE = {"mtime": None, "map": {}}
-_AUTO_UNIVERSE_NAME_NORM_CACHE = {"mtime": None, "tokens": {}}
-_FILE_UNIVERSE_NAME_CACHE = {"mtime": None, "map": {}}
-
-
-def _read_universe_codes(raw_codes):
-    out = []
-    for x in raw_codes or []:
-        s = str(x).strip().upper()
-        if not s:
-            continue
-        s = s.replace(" ", "")
-        base = s
-        if base.endswith(".KL"):
-            base = base[:-3]
-
-        if base.startswith("^") or base.endswith("=F"):
-            continue
-        if "REIT" in base or "ETF" in base:
-            continue
-        if base.endswith("EA"):
-            continue
-        if base.endswith(("WA", "WB", "WC", "WD", "WE", "WF", "WG")) or "-W" in base:
-            continue
-
-        if base.isdigit() and len(base) == 4:
-            out.append(f"{base}.KL")
-    return sorted(set(out))
-
-
-def _load_auto_universe_name_map():
-    try:
-        if not os.path.exists(BURSA_UNIVERSE_AUTO_FILE):
-            return {}
-        mtime = os.path.getmtime(BURSA_UNIVERSE_AUTO_FILE)
-        if _AUTO_UNIVERSE_NAME_CACHE.get("mtime") == mtime and _AUTO_UNIVERSE_NAME_CACHE.get("map"):
-            return _AUTO_UNIVERSE_NAME_CACHE["map"]
-
-        try:
-            df = pd.read_csv(BURSA_UNIVERSE_AUTO_FILE, dtype=str)
-            cols = {str(c).strip().lower(): c for c in df.columns}
-            code_col = cols.get("ticker") or cols.get("symbol") or cols.get("code")
-            name_col = cols.get("name")
-            if not code_col or not name_col:
-                _AUTO_UNIVERSE_NAME_CACHE["mtime"] = mtime
-                _AUTO_UNIVERSE_NAME_CACHE["map"] = {}
-                return {}
-            out = {}
-            for _, row in df[[code_col, name_col]].iterrows():
-                code = str(row[code_col]).strip().upper()
-                name = str(row[name_col]).strip()
-                if not code or not name:
-                    continue
-                if code.isdigit() and len(code) == 4:
-                    out[f"{code}.KL"] = name
-                elif code.endswith(".KL"):
-                    out[code] = name
-            _AUTO_UNIVERSE_NAME_CACHE["mtime"] = mtime
-            _AUTO_UNIVERSE_NAME_CACHE["map"] = out
-            try:
-                _AUTO_UNIVERSE_NAME_NORM_CACHE["mtime"] = mtime
-                _AUTO_UNIVERSE_NAME_NORM_CACHE["tokens"] = {}
-            except Exception:
-                pass
-            return out
-        except Exception:
-            _AUTO_UNIVERSE_NAME_CACHE["mtime"] = mtime
-            _AUTO_UNIVERSE_NAME_CACHE["map"] = {}
-            return {}
-    except Exception:
-        return {}
-
-
-def _load_file_universe_name_map():
-    try:
-        if not os.path.exists(BURSA_UNIVERSE_XLSX_FILE):
-            return {}
-        mtime = os.path.getmtime(BURSA_UNIVERSE_XLSX_FILE)
-        if _FILE_UNIVERSE_NAME_CACHE.get("mtime") == mtime and _FILE_UNIVERSE_NAME_CACHE.get("map"):
-            return _FILE_UNIVERSE_NAME_CACHE["map"]
-
-        out = {}
-        try:
-            import openpyxl
-            wb = openpyxl.load_workbook(BURSA_UNIVERSE_XLSX_FILE, read_only=True, data_only=True)
-            for sheet_name in wb.sheetnames:
-                ws = wb[sheet_name]
-                for row in ws.iter_rows(values_only=True):
-                    if not row or len(row) < 4:
-                        continue
-                    try:
-                        name = str(row[1]).strip() if row[1] is not None else ""
-                    except Exception:
-                        name = ""
-                    try:
-                        code = str(row[3]).strip() if row[3] is not None else ""
-                    except Exception:
-                        code = ""
-                    if not code:
-                        continue
-                    if "STOCK" in str(code).upper() and "CODE" in str(code).upper():
-                        continue
-                    t = _normalize_kl_ticker(code)
-                    if not t:
-                        continue
-                    if name and name.upper() not in {"PUBLIC LISTED COMPANIES", "STOCK CODE"}:
-                        out[str(t).upper()] = name
-        except Exception:
-            try:
-                with zipfile.ZipFile(BURSA_UNIVERSE_XLSX_FILE, "r") as zf:
-                    ss = []
-                    try:
-                        root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
-                        for si in root.iter():
-                            if si.tag.endswith("t"):
-                                ss.append(si.text or "")
-                    except Exception:
-                        ss = []
-                    try:
-                        sheet_xml = zf.read("xl/worksheets/sheet1.xml")
-                        root = ET.fromstring(sheet_xml)
-                        rows = {}
-                        for c in root.iter():
-                            if not c.tag.endswith("c"):
-                                continue
-                            r = c.attrib.get("r") or ""
-                            if not r:
-                                continue
-                            col = re.sub(r"\d+", "", r).upper()
-                            if col not in {"B", "D"}:
-                                continue
-                            row_i = int(re.sub(r"\D+", "", r) or "0")
-                            if row_i <= 0:
-                                continue
-                            t_attr = c.attrib.get("t")
-                            v_txt = None
-                            if t_attr == "inlineStr":
-                                for t_el in c.iter():
-                                    if t_el.tag.endswith("t"):
-                                        v_txt = t_el.text
-                                        break
-                            else:
-                                for v_el in c.iter():
-                                    if v_el.tag.endswith("v"):
-                                        v_txt = v_el.text
-                                        break
-                                if t_attr == "s" and v_txt is not None:
-                                    try:
-                                        v_txt = ss[int(str(v_txt).strip())]
-                                    except Exception:
-                                        pass
-                            if v_txt is None:
-                                continue
-                            rows.setdefault(row_i, {})[col] = str(v_txt).strip()
-                        for _, d in rows.items():
-                            name = str(d.get("B") or "").strip()
-                            code = str(d.get("D") or "").strip()
-                            if not code:
-                                continue
-                            if "STOCK" in code.upper() and "CODE" in code.upper():
-                                continue
-                            t = _normalize_kl_ticker(code)
-                            if not t:
-                                continue
-                            if name and name.upper() not in {"PUBLIC LISTED COMPANIES", "STOCK CODE"}:
-                                out[str(t).upper()] = name
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        _FILE_UNIVERSE_NAME_CACHE["mtime"] = mtime
-        _FILE_UNIVERSE_NAME_CACHE["map"] = out
-        return out
-    except Exception:
-        return {}
-
-
-def _file_universe_name(ticker: str) -> str | None:
-    try:
-        t = str(ticker).upper().strip()
-        if not t:
-            return None
-        return _load_file_universe_name_map().get(t)
-    except Exception:
-        return None
-
-
-def _auto_universe_name(ticker: str):
-    try:
-        t = str(ticker).upper().strip()
-        if not t:
-            return None
-        return _load_auto_universe_name_map().get(t)
-    except Exception:
-        return None
-
-
-def _name_tokens(s: str) -> set[str]:
-    try:
-        x = str(s or "").upper()
-        x = x.replace("&", " AND ")
-        x = re.sub(r"[^A-Z0-9 ]+", " ", x)
-        x = re.sub(r"\s+", " ", x).strip()
-        if not x:
-            return set()
-        drop = {
-            "BERHAD",
-            "BHD",
-            "BHDS",
-            "GROUP",
-            "HOLDINGS",
-            "HOLDING",
-            "MALAYSIA",
-            "INTERNATIONAL",
-            "CORPORATION",
-            "CORP",
-            "COMPANY",
-            "CO",
-            "PUBLIC",
-            "LIMITED",
-            "LTD",
-            "SDN",
-            "BHD",
-            "THE",
-        }
-        toks = [t for t in x.split(" ") if t and t not in drop]
-        return set(toks)
-    except Exception:
-        return set()
-
-
-def _best_ticker_match_by_name(company_name: str) -> str | None:
-    try:
-        target = _name_tokens(company_name)
-        if len(target) < 2:
-            return None
-        name_map = _load_auto_universe_name_map()
-        if not name_map:
-            return None
-
-        mtime = None
-        try:
-            mtime = os.path.getmtime(BURSA_UNIVERSE_AUTO_FILE)
-        except Exception:
-            mtime = None
-
-        if _AUTO_UNIVERSE_NAME_NORM_CACHE.get("mtime") != mtime or not _AUTO_UNIVERSE_NAME_NORM_CACHE.get("tokens"):
-            tok_map = {}
-            for t, n in name_map.items():
-                tok_map[t] = _name_tokens(n)
-            _AUTO_UNIVERSE_NAME_NORM_CACHE["mtime"] = mtime
-            _AUTO_UNIVERSE_NAME_NORM_CACHE["tokens"] = tok_map
-
-        tok_map = _AUTO_UNIVERSE_NAME_NORM_CACHE.get("tokens") or {}
-        best_t = None
-        best_score = 0.0
-        for t, toks in tok_map.items():
-            if not toks:
-                continue
-            inter = len(target & toks)
-            if inter == 0:
-                continue
-            score = inter / float(max(len(target), len(toks)))
-            if score > best_score:
-                best_score = score
-                best_t = t
-        if best_t and best_score >= 0.5:
-            return str(best_t).upper().strip()
-        return None
-    except Exception:
-        return None
-
-
-def _fetch_universe_from_github():
-    url = "https://raw.githubusercontent.com/KennethChua1998/BursaMalaysiaWebScrapper/master/stock_list.csv"
-    try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=25)
-        r.raise_for_status()
-        text = r.text
-        if not text:
-            return [], {}
-        reader = csv.DictReader(text.splitlines())
-        raw_codes = []
-        name_map = {}
-        for row in reader:
-            code = str(row.get("code") or "").strip()
-            name = str(row.get("name") or "").strip()
-            if not code:
-                continue
-            raw_codes.append(code)
-            if name and code.isdigit() and len(code) == 4:
-                name_map[f"{code}.KL"] = name
-        tickers = _read_universe_codes(raw_codes)
-        return tickers, name_map
-    except Exception:
-        return [], {}
-
-
-def _load_or_refresh_auto_universe(max_age_days: int = 14):
-    try:
-        if os.path.exists(BURSA_UNIVERSE_AUTO_FILE):
-            try:
-                age_s = (pd.Timestamp.now() - pd.Timestamp.fromtimestamp(os.path.getmtime(BURSA_UNIVERSE_AUTO_FILE))).total_seconds()
-                if age_s < float(max_age_days) * 86400.0:
-                    try:
-                        with open(BURSA_UNIVERSE_AUTO_FILE, "r", encoding="utf-8", errors="ignore") as f:
-                            header = str(f.readline() or "").strip().lower()
-                        if "name" in header and ("code" in header or "ticker" in header or "symbol" in header):
-                            return _load_universe_from_file(BURSA_UNIVERSE_AUTO_FILE)
-                    except Exception:
-                        return _load_universe_from_file(BURSA_UNIVERSE_AUTO_FILE)
-            except Exception:
-                pass
-
-        u, name_map = _fetch_universe_from_github()
-        if u:
-            try:
-                with open(BURSA_UNIVERSE_AUTO_FILE, "w", encoding="utf-8", newline="") as f:
-                    w = csv.writer(f)
-                    w.writerow(["code", "name"])
-                    for t in u:
-                        w.writerow([t.replace(".KL", ""), name_map.get(t) or ""])
-            except Exception:
-                pass
-            try:
-                _AUTO_UNIVERSE_NAME_CACHE["mtime"] = os.path.getmtime(BURSA_UNIVERSE_AUTO_FILE)
-                _AUTO_UNIVERSE_NAME_CACHE["map"] = name_map
-            except Exception:
-                pass
-            return u
-        return _load_universe_from_file(BURSA_UNIVERSE_FILE)
-    except Exception:
-        return []
-
-def _load_universe_from_file(path: str):
-    try:
-        if not path or not os.path.exists(path):
-            return []
-        try:
-            df = pd.read_csv(path, dtype=str)
-            cols = [c for c in df.columns if str(c).strip().lower() in {"ticker", "symbol", "code"}]
-            if cols:
-                raw = df[cols[0]].dropna().astype(str).tolist()
-            else:
-                raw = df.iloc[:, 0].dropna().astype(str).tolist()
-        except Exception:
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                raw = [line.strip() for line in f.readlines()]
-        cleaned = []
-        for x in raw:
-            s = str(x).strip().upper()
-            if not s:
-                continue
-            if s in {"TICKER", "SYMBOL", "CODE"}:
-                continue
-            cleaned.append(s)
-        return _read_universe_codes(cleaned)
-    except Exception:
-        return []
-
-def _load_universe_from_xlsx(path: str) -> list[str]:
-    try:
-        if not path or not os.path.exists(path):
-            return []
-        raw = []
-        try:
-            import openpyxl
-            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-            for sheet_name in wb.sheetnames:
-                ws = wb[sheet_name]
-                for row in ws.iter_rows(values_only=True):
-                    if not row:
-                        continue
-                    if len(row) >= 4 and row[3] is not None:
-                        raw.append(str(row[3]))
-        except Exception:
-            try:
-                with zipfile.ZipFile(path, "r") as zf:
-                    sheet_xml = zf.read("xl/worksheets/sheet1.xml")
-                    root = ET.fromstring(sheet_xml)
-                    for c in root.iter():
-                        if not c.tag.endswith("c"):
-                            continue
-                        r = c.attrib.get("r") or ""
-                        if not r:
-                            continue
-                        col = re.sub(r"\d+", "", r).upper()
-                        if col != "D":
-                            continue
-                        v_txt = None
-                        t_attr = c.attrib.get("t")
-                        if t_attr == "inlineStr":
-                            for t_el in c.iter():
-                                if t_el.tag.endswith("t"):
-                                    v_txt = t_el.text
-                                    break
-                        else:
-                            for v_el in c.iter():
-                                if v_el.tag.endswith("v"):
-                                    v_txt = v_el.text
-                                    break
-                        if v_txt is not None:
-                            raw.append(str(v_txt))
-            except Exception:
-                try:
-                    sheets = pd.read_excel(path, sheet_name=None, dtype=str)
-                except Exception:
-                    return []
-            except Exception:
-                return []
-            for _, df in (sheets or {}).items():
-                if df is None or df.empty:
-                    continue
-                cols = list(df.columns)
-                if len(cols) >= 4:
-                    try:
-                        raw.extend(df[cols[3]].dropna().astype(str).tolist())
-                    except Exception:
-                        pass
-        out = []
-        for x in raw:
-            t = _normalize_kl_ticker(x)
-            if t:
-                out.append(t)
-                continue
-            try:
-                m = re.search(r"\b(\d{4})\b", str(x))
-                if m:
-                    t2 = _normalize_kl_ticker(m.group(1))
-                    if t2:
-                        out.append(t2)
-            except Exception:
-                pass
-        return sorted({t for t in out if t})
-    except Exception:
-        return []
-
-def get_stock_universe(mode: str = "curated"):
-    m = str(mode or "").lower().strip()
-    if m in {"focus", "focus-sectors", "myfocus", "focus_large_mid"}:
-        parts = []
-        for k in ["sector-tech", "sector-energy", "sector-banks", "sector-utilities", "sector-infra", "sector-telco"]:
-            u, _ = get_sector_large_cap_universe(k)
-            parts.extend(u)
-
-        ai_pinned = [
-            "0097.KL",
-            "0128.KL",
-            "0166.KL",
-            "0208.KL",
-            "3867.KL",
-            "4456.KL",
-            "5005.KL",
-            "5286.KL",
-            "5292.KL",
-            "7204.KL",
-            "7471.KL",
-            "9334.KL",
-            "4677.KL",
-            "6742.KL",
-            "4863.KL",
-            "5031.KL",
-            "6947.KL",
-        ]
-        parts.extend([t for t in (_normalize_kl_ticker(x) for x in ai_pinned) if t])
-
-        parts = _filter_to_large_mid(parts)
-        parts = sorted({str(x).upper().strip() for x in parts if _normalize_kl_ticker(x)})
-        return parts, "focus"
-    if m.startswith("sector-"):
-        u, src = get_sector_large_cap_universe(m)
-        return u, src
-    if m in {"klci", "big", "bigcap", "large", "largecap"}:
-        if KLCI_AUTO_UPDATE_ENABLED:
-            u, src = refresh_klci_components(force=bool(INDEX_FORCE_REFRESH), max_age_days=30)
-            return u, f"klci-{src}"
-        return list(KLCI_COMPONENTS), "klci-static"
-    if m in {"fbm70", "mid70", "m70"}:
-        u, src = refresh_index_components("fbm70", force=bool(INDEX_FORCE_REFRESH), max_age_days=30, allow_network=bool(INDEX_AUTO_UPDATE_ENABLED))
-        if u:
-            return u, f"fbm70-{src}"
-        return [], "fbm70-unavailable"
-    if m in {"fbm100", "top100", "t100", "top_100"}:
-        u, src = refresh_index_components("fbm100", force=bool(INDEX_FORCE_REFRESH), max_age_days=30, allow_network=bool(INDEX_AUTO_UPDATE_ENABLED))
-        if u:
-            return u, f"fbm100-{src}"
-        return [], "fbm100-unavailable"
-    if m in {"smallcap", "small", "sc"}:
-        u, src = refresh_index_components("smallcap", force=bool(INDEX_FORCE_REFRESH), max_age_days=30, allow_network=bool(INDEX_AUTO_UPDATE_ENABLED))
-        if u:
-            return u, f"smallcap-{src}"
-        return [], "smallcap-unavailable"
-    if m in {"auto", "malaysia", "my"}:
-        u = _load_or_refresh_auto_universe()
-        if u:
-            return u, "auto"
-    if m in {"file", "full", "all"}:
-        u = _load_universe_from_file(BURSA_UNIVERSE_FILE)
-        if u:
-            return u, "file"
-    return STOCK_DISCOVERY_UNIVERSE, "curated"
-
-# --- MALAYSIAN FUTURES ---
-FUTURES_COMPONENTS = [
-    "FKLI=F", # FTSE Bursa Malaysia KLCI Futures
-    "FCPO=F", # Crude Palm Oil Futures
-    "FM70=F"  # FTSE Bursa Malaysia Mid 70 Index Futures
-]
-
-def get_futures_breakouts():
-    """
-    Specifically analyzes Malaysian Futures for breakouts.
-    """
-    results = []
-    # Fetching individually for futures as they often have specific symbol issues
-    for ticker in FUTURES_COMPONENTS:
-        # Try a longer period for futures indices
-        df, name = get_stock_data(ticker, period="2y")
-        
-        if df is None or df.empty:
-            continue
-
-        if len(df) >= 2:
-            try:
-                last_close = df["Close"].iloc[-1] if "Close" in df.columns else None
-                last_open = df["Open"].iloc[-1] if "Open" in df.columns else None
-                if (pd.isna(last_close) or pd.isna(last_open)):
-                    df = df.iloc[:-1]
-                elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0 and not _is_today_kl(df.index[-1]):
-                    df = df.iloc[:-1]
-            except Exception:
-                pass
-
-        try:
-            last_close = float(df["Close"].iloc[-1])
-            if not (last_close > 0.0):
-                continue
-        except Exception:
-            continue
-
-        # Be slightly more lenient with row count for futures
-        # If it's a major index with very short history (like FBM70.FGI),
-        # we provide a fallback row count.
-        min_r = 30 if len(df) >= 30 else len(df)
-        analysis = analyze_breakout(ticker, df, name, min_rows=min_r)
-        if analysis:
-            results.append(analysis)
-    return results
-
-def get_top_breakouts(
-    limit=10,
-    model="v2",
-    universe_mode="curated",
-    universe=None,
-    sector_allowlist=None,
-    signal_lookback=5,
-    max_runup_pct=None,
-    max_pullback_pct=None,
-    retest_days=0,
-    max_tickers=None,
-    breakout_buffer_pct: float | None = None,
-    volume_spike_mult: float | None = None,
-    power_close_pos_min: float | None = None,
-    power_body_pct_min: float | None = None,
-    min_traded_value20: float | None = None,
-    require_rs_positive: bool = False,
-    require_atr_contraction: bool = False,
-    require_benchmark_trend: bool = False,
-):
-    """
-    Scans a stock universe and returns the top N stocks 
-    based on their breakout scores.
-    """
-    all_results = []
-    benchmark_df = None
-    m = str(model).lower()
-    if m in {"v2", "v3"}:
-        try:
-            bench = yf.Ticker("^KLSE")
-            benchmark_df = bench.history(period="1y")
-            if benchmark_df is not None and not benchmark_df.empty:
-                benchmark_df = benchmark_df.dropna(subset=[c for c in ["Close"] if c in benchmark_df.columns])
-        except Exception:
-            benchmark_df = None
-    
-    tickers = universe if universe is not None else get_stock_universe(universe_mode)[0]
-    try:
-        if max_tickers is not None:
-            n = int(max_tickers)
-            if n > 0:
-                tickers = tickers[:n]
-    except Exception:
-        pass
-    allow = None
-    if m == "v3" and sector_allowlist:
-        allow = {str(x).strip().lower() for x in sector_allowlist if str(x).strip()}
-    # Using individual fetching for better error handling in this environment
-    for ticker in tickers:
-        if allow:
-            t = str(ticker).upper().strip()
-            code = t.split(".")[0]
-            insight = MARKET_INSIGHTS.get(t)
-            if not insight:
-                for _, v in MARKET_INSIGHTS.items():
-                    if v.get("code") == code:
-                        insight = v
-                        break
-            sector = None
-            if insight:
-                sector = insight.get("sector")
-            if sector and str(sector).strip().lower() not in allow:
-                continue
-        df, resolved_name = get_stock_data(ticker, period="1y")
-        if df is None or df.empty:
-            continue
-
-        if len(df) >= 2:
-            try:
-                last_close = df["Close"].iloc[-1] if "Close" in df.columns else None
-                last_open = df["Open"].iloc[-1] if "Open" in df.columns else None
-                if (pd.isna(last_close) or pd.isna(last_open)):
-                    df = df.iloc[:-1]
-                elif "Volume" in df.columns and float(df["Volume"].iloc[-1]) == 0.0 and float(df["Volume"].iloc[-2]) > 0.0 and not _is_today_kl(df.index[-1]):
-                    df = df.iloc[:-1]
-            except Exception:
-                pass
-
-        try:
-            last_close = float(df["Close"].iloc[-1])
-            if not (last_close > 0.0):
-                continue
-        except Exception:
-            continue
-
-        try:
-            if "Volume" in df.columns:
-                tail_vol = pd.to_numeric(df["Volume"].tail(5), errors="coerce")
-                if tail_vol.fillna(0).max() <= 0:
-                    continue
-        except Exception:
-            continue
-
-        if m == "v3":
-            analysis = analyze_breakout_v3(
-                ticker,
-                df,
-                resolved_name,
-                benchmark_df=benchmark_df,
-                min_rows=120,
-                signal_lookback=signal_lookback,
-                max_runup_pct=max_runup_pct,
-                max_pullback_pct=max_pullback_pct,
-                retest_days=retest_days,
-                breakout_buffer_pct=breakout_buffer_pct,
-                volume_spike_mult=volume_spike_mult,
-                power_close_pos_min=power_close_pos_min,
-                power_body_pct_min=power_body_pct_min,
-                min_traded_value20=min_traded_value20,
-                require_rs_positive=bool(require_rs_positive),
-                require_atr_contraction=bool(require_atr_contraction),
-                require_benchmark_trend=bool(require_benchmark_trend),
-            )
-        elif m == "v2":
-            analysis = analyze_breakout_v2(ticker, df, resolved_name, benchmark_df=benchmark_df, min_rows=120)
-        else:
-            analysis = analyze_breakout(ticker, df, resolved_name)
-        if analysis:
-            all_results.append(analysis)
-    
-    if str(model).lower() == "v3":
-        all_results.sort(
-            key=lambda x: (
-                bool(x.get("retest_confirmed")),
-                bool(x.get("breakout_candle_valid")),
-                int(x.get("score", 0)),
-                -float(x.get("rsi", 0.0) or 0.0),
-            ),
-            reverse=True,
-        )
-    else:
-        all_results.sort(key=lambda x: (x['score'], -x['rsi']), reverse=True)
-    
-    return all_results[:limit]
-
-def search_bursa(query):
-    """
-    Searches for a Bursa Malaysia stock code or symbol.
-    """
-    query_upper = str(query or "").upper().strip()
-    if not query_upper:
-        return None
-    
-    # Precise mapping for futures
-    if query_upper == "FKLI": return "FKLI=F"
-    if query_upper == "FCPO": return "FCPO=F"
-    if query_upper == "FM70": return "FM70=F"
-    
-    if query_upper in MARKET_INSIGHTS:
-        return query_upper
-
-    if query_upper.endswith(".KL") and len(query_upper.split(".")[0]) == 4 and query_upper.split(".")[0].isdigit():
-        return query_upper
-
-    if query_upper in {"^KLSE", "^KLSI"}:
-        return "^KLSE"
-
-    if query_upper.isdigit() and len(query_upper) == 4:
-        return f"{query_upper}.KL"
-
-    try:
-        for k, v in MARKET_INSIGHTS.items():
-            code = str(v.get("code") or "").strip().upper()
-            name = str(v.get("name") or "").strip().upper()
-            if query_upper == name or query_upper == code:
-                return str(k).upper().strip()
-    except Exception:
-        pass
-
-    try:
-        name_map = _load_auto_universe_name_map()
-        if name_map:
-            for t, n in name_map.items():
-                if query_upper == str(n).strip().upper():
-                    return str(t).upper().strip()
-            for t, n in name_map.items():
-                if query_upper in str(n).strip().upper():
-                    return str(t).upper().strip()
-    except Exception:
-        pass
-
-    try:
-        for k, v in MARKET_INSIGHTS.items():
-            code = str(v.get("code") or "").strip().upper()
-            name = str(v.get("name") or "").strip().upper()
-            if not name:
-                continue
-            parts = [p for p in re.split(r"[^A-Z0-9]+", name) if p]
-            if query_upper in parts:
-                return str(k).upper().strip()
-            if query_upper == name.replace(" ", ""):
-                return str(k).upper().strip()
-    except Exception:
-        pass
-
-    try:
-        url = "https://query2.finance.yahoo.com/v1/finance/search"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, params={"q": query_upper, "quotesCount": 10}, timeout=15).json()
-        for quote in response.get('quotes', []):
-            if quote.get('symbol', '').endswith('.KL'):
-                return quote['symbol']
-    except Exception:
-        pass
-    return None
