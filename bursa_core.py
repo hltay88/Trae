@@ -2673,9 +2673,11 @@ STOCK_DISCOVERY_UNIVERSE = sorted(
 
 BURSA_UNIVERSE_FILE = os.path.join(os.path.dirname(__file__), "bursa_universe.csv")
 BURSA_UNIVERSE_AUTO_FILE = os.path.join(os.path.dirname(__file__), "bursa_universe_auto.csv")
+BURSA_UNIVERSE_XLSX_FILE = os.path.join(os.path.dirname(__file__), "List_of_Companies.xlsx")
 
 _AUTO_UNIVERSE_NAME_CACHE = {"mtime": None, "map": {}}
 _AUTO_UNIVERSE_NAME_NORM_CACHE = {"mtime": None, "tokens": {}}
+_FILE_UNIVERSE_NAME_CACHE = {"mtime": None, "map": {}}
 
 
 def _read_universe_codes(raw_codes):
@@ -2746,8 +2748,6 @@ def _load_auto_universe_name_map():
         return {}
 
 
-<<<<<<< Updated upstream
-=======
 def _load_file_universe_name_map():
     try:
         if not os.path.exists(BURSA_UNIVERSE_XLSX_FILE):
@@ -2862,7 +2862,6 @@ def _file_universe_name(ticker: str) -> str | None:
         return None
 
 
->>>>>>> Stashed changes
 def _auto_universe_name(ticker: str):
     try:
         t = str(ticker).upper().strip()
@@ -3036,9 +3035,6 @@ def _load_universe_from_file(path: str):
     except Exception:
         return []
 
-<<<<<<< Updated upstream
-=======
-
 def _load_universe_from_xlsx(path: str) -> list[str]:
     try:
         if not path or not os.path.exists(path):
@@ -3116,7 +3112,6 @@ def _load_universe_from_xlsx(path: str) -> list[str]:
     except Exception:
         return []
 
->>>>>>> Stashed changes
 def get_stock_universe(mode: str = "curated"):
     m = str(mode or "").lower().strip()
     if m in {"focus", "focus-sectors", "myfocus", "focus_large_mid"}:
