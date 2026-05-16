@@ -25,6 +25,7 @@ from html import escape as _html_escape
 import streamlit.components.v1 as components
 import bursa_core as _core
 
+
 MARKET_INSIGHTS = _core.MARKET_INSIGHTS
 get_stock_data = _core.get_stock_data
 analyze_breakout = _core.analyze_breakout
