@@ -108,6 +108,79 @@ KLCI_COMPONENTS_FILE = APP_DIR / "klci_components_auto.txt"
 STOCK_DISCOVERY_UNIVERSE = [t for t in MARKET_INSIGHTS.keys() if t.endswith(".KL")]
 KLCI_COMPONENTS = set()  # filled lazily by get_stock_universe()
 
+# Auto-universe name map (code -> company name). Loaded on demand.
+_AUTO_NAME_MAP: dict[str, str] | None = None
+
+
+def _short_company_name(name: str) -> str:
+    """
+    Makes long Bursa company names more readable in tables.
+    Example: "ABC BERHAD" -> "ABC"
+    """
+    try:
+        s = str(name or "").strip()
+        if not s:
+            return s
+        s = re.sub(r"\s+", " ", s).strip()
+        # common suffixes
+        s = re.sub(r"\bBERHAD\b", "", s, flags=re.IGNORECASE).strip()
+        s = re.sub(r"\bBHD\b", "", s, flags=re.IGNORECASE).strip()
+        s = re.sub(r"\bSDN\.?\s*BHD\b", "", s, flags=re.IGNORECASE).strip()
+        s = re.sub(r"\bHOLDINGS?\b", "HLDG", s, flags=re.IGNORECASE).strip()
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+    except Exception:
+        return str(name or "").strip()
+
+
+def _load_auto_universe_name_map() -> dict[str, str]:
+    global _AUTO_NAME_MAP
+    if isinstance(_AUTO_NAME_MAP, dict) and _AUTO_NAME_MAP:
+        return _AUTO_NAME_MAP
+
+    m: dict[str, str] = {}
+    p = Path(BURSA_UNIVERSE_AUTO_FILE)
+    try:
+        if p.exists():
+            with p.open("r", encoding="utf-8", errors="ignore", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if not row:
+                        continue
+                    code = str(row.get("code") or row.get("Code") or "").strip()
+                    name = str(row.get("name") or row.get("Name") or "").strip()
+                    if not (code.isdigit() and len(code) == 4):
+                        continue
+                    if not name:
+                        continue
+                    t = f"{code}.KL"
+                    m[t.upper()] = _short_company_name(name)
+    except Exception:
+        m = {}
+
+    _AUTO_NAME_MAP = m
+    return m
+
+
+def _auto_universe_name(ticker: str) -> str | None:
+    """
+    Best-effort: resolve a nicer company name from bursa_universe_auto.csv.
+    Returns None if not found.
+    """
+    try:
+        t = str(ticker or "").upper().strip()
+        if not t:
+            return None
+        code = t.split(".")[0].replace("^", "").strip()
+        mp = _load_auto_universe_name_map()
+        if t in mp:
+            return mp.get(t)
+        if code.isdigit() and len(code) == 4:
+            return mp.get(f"{code}.KL")
+        return None
+    except Exception:
+        return None
+
 
 def _is_today_kl(ts) -> bool:
     try:
@@ -277,6 +350,14 @@ def _resolve_insight(ticker: str, resolved_name: str | None) -> tuple[str, str, 
         code = str(insight.get("code") or code)
     else:
         name = (resolved_name or code) if resolved_name else code
+    # Fallback for when yfinance doesn't provide a name:
+    try:
+        if (not resolved_name) or (str(resolved_name).strip().upper() in {t, code, f"{code}.KL"}):
+            nm = _auto_universe_name(t) or _auto_universe_name(f"{code}.KL")
+            if nm:
+                name = nm
+    except Exception:
+        pass
     name = str(name).replace(".KL", "").strip()
     return code, name, analysis, catalyst
 
@@ -302,6 +383,15 @@ def _resolve_insight_v3(ticker: str, resolved_name: str | None) -> tuple[str, st
         catalyst = str(insight.get("catalyst") or catalyst)
         sector = str(insight.get("sector") or sector).strip() or sector
         code = str(insight.get("code") or code)
+    else:
+        # Fallback for when yfinance doesn't provide a name:
+        try:
+            if (not resolved_name) or (str(resolved_name).strip().upper() in {t, code, f"{code}.KL"}):
+                nm = _auto_universe_name(t) or _auto_universe_name(f"{code}.KL")
+                if nm:
+                    name = nm
+        except Exception:
+            pass
 
     name = str(name).replace(".KL", "").strip()
     if name.strip() == code:
@@ -1089,6 +1179,21 @@ def search_bursa(query):
         name = str(v.get("name") or "").upper().strip()
         if name and q in re.split(r"[^A-Z0-9]+", name):
             return str(k).upper().strip()
+
+    # match against auto-universe name map (supports partial matches)
+    try:
+        mp = _load_auto_universe_name_map()
+        if mp:
+            # exact name match first
+            for t, nm in mp.items():
+                if q == str(nm).upper().strip():
+                    return str(t).upper().strip()
+            # then substring match (first hit)
+            for t, nm in mp.items():
+                if q and q in str(nm).upper():
+                    return str(t).upper().strip()
+    except Exception:
+        pass
     return None
 
 
@@ -1252,4 +1357,3 @@ def summarize_market_impacts(trends: dict) -> list[str]:
     if int(theme_scores.get("FX", 0) or 0) > 0:
         notes.append("FX headlines: ringgit and USD moves can impact exporters/importers and commodity-linked earnings translation.")
     return notes[:6]
-
