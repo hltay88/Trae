@@ -110,6 +110,8 @@ KLCI_COMPONENTS = set()  # filled lazily by get_stock_universe()
 
 # Auto-universe name map (code -> company name). Loaded on demand.
 _AUTO_NAME_MAP: dict[str, str] | None = None
+_SEARCH_CACHE: dict[str, tuple[float, str | None]] = {}
+_SEARCH_CACHE_SECONDS = 12 * 3600
 
 
 def _short_company_name(name: str) -> str:
@@ -138,25 +140,50 @@ def _load_auto_universe_name_map() -> dict[str, str]:
     if isinstance(_AUTO_NAME_MAP, dict) and _AUTO_NAME_MAP:
         return _AUTO_NAME_MAP
 
-    m: dict[str, str] = {}
-    p = Path(BURSA_UNIVERSE_AUTO_FILE)
-    try:
-        if p.exists():
-            with p.open("r", encoding="utf-8", errors="ignore", newline="") as f:
+    def _merge_code_name_csv(path: Path, code_key: str = "code", name_key: str = "name") -> dict[str, str]:
+        out: dict[str, str] = {}
+        try:
+            if not path.exists():
+                return out
+            with path.open("r", encoding="utf-8", errors="ignore", newline="") as f:
                 reader = csv.DictReader(f)
+                if not reader.fieldnames:
+                    return out
+                fields = {str(x).strip().lower() for x in (reader.fieldnames or [])}
+                if code_key.lower() not in fields or name_key.lower() not in fields:
+                    return out
                 for row in reader:
                     if not row:
                         continue
-                    code = str(row.get("code") or row.get("Code") or "").strip()
-                    name = str(row.get("name") or row.get("Name") or "").strip()
+                    code = str(row.get(code_key) or row.get(code_key.title()) or "").strip()
+                    name = str(row.get(name_key) or row.get(name_key.title()) or "").strip()
                     if not (code.isdigit() and len(code) == 4):
                         continue
                     if not name:
                         continue
-                    t = f"{code}.KL"
-                    m[t.upper()] = _short_company_name(name)
+                    out[f"{code}.KL".upper()] = _short_company_name(name)
+            return out
+        except Exception:
+            return out
+
+    m: dict[str, str] = {}
+
+    # Prefer richer name sources when available (index cache usually has code,name)
+    try:
+        for p in [
+            INDEX_COMPONENTS_CACHE_DIR / "fbm100.txt",
+            INDEX_COMPONENTS_CACHE_DIR / "fbm70.txt",
+            INDEX_COMPONENTS_CACHE_DIR / "smallcap.txt",
+        ]:
+            m.update(_merge_code_name_csv(p, code_key="code", name_key="name"))
     except Exception:
-        m = {}
+        pass
+
+    # If user has an auto-universe file with names, merge it too.
+    try:
+        m.update(_merge_code_name_csv(Path(BURSA_UNIVERSE_AUTO_FILE), code_key="code", name_key="name"))
+    except Exception:
+        pass
 
     _AUTO_NAME_MAP = m
     return m
@@ -1194,6 +1221,45 @@ def search_bursa(query):
                     return str(t).upper().strip()
     except Exception:
         pass
+
+    # Yahoo search fallback (fixes cases like "genetec" -> 0104.KL)
+    # This runs only when local maps can't resolve the query.
+    try:
+        now = time.time()
+        cached = _SEARCH_CACHE.get(q)
+        if cached and (now - float(cached[0])) <= float(_SEARCH_CACHE_SECONDS):
+            return cached[1]
+        out = None
+        try:
+            s = yf.Search(q)
+            quotes = getattr(s, "quotes", None) or []
+            # Prefer Bursa/KLS + .KL symbols
+            for it in quotes:
+                sym = str((it or {}).get("symbol") or "").upper().strip()
+                exch = str((it or {}).get("exchange") or "").upper().strip()
+                if sym.endswith(".KL") and (exch in {"KLS", "KLSE"} or "KUALA" in str((it or {}).get("exchDisp") or "").upper()):
+                    out = sym
+                    nm = (it or {}).get("shortname") or (it or {}).get("longname") or ""
+                    if nm:
+                        try:
+                            mp2 = _load_auto_universe_name_map()
+                            mp2[out] = _short_company_name(str(nm))
+                        except Exception:
+                            pass
+                    break
+            # Any .KL result as fallback
+            if out is None:
+                for it in quotes:
+                    sym = str((it or {}).get("symbol") or "").upper().strip()
+                    if sym.endswith(".KL"):
+                        out = sym
+                        break
+        except Exception:
+            out = None
+        _SEARCH_CACHE[q] = (now, out)
+        return out
+    except Exception:
+        return None
     return None
 
 
