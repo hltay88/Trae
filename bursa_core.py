@@ -385,6 +385,25 @@ def _load_universe_from_xlsx(path: Path) -> list[str]:
         return []
 
 
+def _write_universe_csv(path: str, tickers: list[str]) -> bool:
+    try:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("w", encoding="utf-8", newline="\n") as f:
+            f.write("ticker\n")
+            for t in tickers:
+                s = str(t or "").strip().upper()
+                if not s:
+                    continue
+                if s.isdigit() and len(s) == 4:
+                    s = f"{s}.KL"
+                if s.endswith(".KL"):
+                    f.write(f"{s}\n")
+        return True
+    except Exception:
+        return False
+
+
 def get_stock_universe(mode: str = "curated") -> tuple[list[str], str]:
     """
     Returns (tickers, source_label).
@@ -421,11 +440,15 @@ def get_stock_universe(mode: str = "curated") -> tuple[list[str], str]:
                 xls.extend(_load_universe_from_xlsx(p))
             if xls:
                 seen = set(u)
+                merged = list(u)
                 for t in xls:
                     if t in seen:
                         continue
                     seen.add(t)
-                    u.append(t)
+                    merged.append(t)
+                if len(merged) != len(u):
+                    _write_universe_csv(BURSA_UNIVERSE_FILE, merged)
+                u = merged
         except Exception:
             pass
         return (u, "file") if u else (list(STOCK_DISCOVERY_UNIVERSE), "file-fallback")

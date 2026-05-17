@@ -936,7 +936,7 @@ if not popup_mode:
         if st.session_state.universe_mode == "auto":
             st.sidebar.caption("Auto universe downloads & caches a Malaysia stock list; the first run may take longer.")
         else:
-            st.sidebar.caption("From File (Full) loads bursa_universe.csv (one 4-digit code per line, example: 6742 or 6742.KL) and will also auto-include any List_of_Companies*.xlsx in the app folder (Column D = stock code).")
+            st.sidebar.caption("From File (Full) loads bursa_universe.csv (one 4-digit code per line, example: 6742 or 6742.KL) and will also auto-include any List_of_Companies*.xlsx in the app folder (Column D = stock code). New tickers will be written back into bursa_universe.csv.")
         max_scan = st.sidebar.slider("Max tickers to scan", min_value=50, max_value=1200, value=int(st.session_state.max_tickers_scan), step=50)
         if int(max_scan) != int(st.session_state.max_tickers_scan):
             st.session_state.max_tickers_scan = int(max_scan)
