@@ -208,6 +208,17 @@ def _fmt_x(v, ndp: int = 2):
     except Exception:
         return ""
 
+
+def _signal_text_for_row(r: dict) -> str:
+    try:
+        if (r.get("watch_only")) and (not bool(r.get("breakout_55"))):
+            return "👀 WATCH"
+        if (not bool(r.get("breakout_candle_valid"))) and (not bool(r.get("retest_confirmed"))) and bool(r.get("near_breakout")):
+            return "🟡 NEAR"
+        return "✅ CONFIRMED" if r.get("retest_confirmed") else ("⚡ BREAKOUT" if r.get("breakout_candle_valid") else ("❌ FAILED" if (r.get("breakout_candle") and (r.get("breakout_hold_ok") is False)) else ("⏰ LATE" if r.get("breakout_candle") else ("📈 Breakout" if r.get("breakout_55") else ""))))
+    except Exception:
+        return ""
+
 def _get_secret_value(key: str) -> str | None:
     try:
         v = None
@@ -1312,6 +1323,72 @@ if not popup_mode:
                     _notify("success", f"Added {ticker} to watchlist.")
         else:
             _notify("error", "Could not find stock. Try using the exact code (e.g., 5347).")
+
+    with st.sidebar.expander("⭐ Build My Watchlist (Pin from V1/V2/V3)", expanded=False):
+        try:
+            model_label2 = st.selectbox(
+                "Pick ideas from",
+                ["Breakout Candle (V3)", "Stronger (V2)", "Original (V1)"],
+                index=0,
+                key="watchlist_picker_model",
+            )
+        except Exception:
+            model_label2 = "Breakout Candle (V3)"
+        picker_model = "v3" if str(model_label2).startswith("Breakout") else ("v2" if str(model_label2).startswith("Stronger") else "v1")
+        picker_sector_allow = (st.session_state.sector_focus or None) if picker_model == "v3" else None
+        picker_scan_params = _v3_params_for_model("v3") if picker_model == "v3" else {}
+        picker_max = st.session_state.max_tickers_scan if st.session_state.universe_mode in {"auto", "file"} else None
+        try:
+            pick_rows = _cached_top_breakouts(
+                limit=50,
+                model=picker_model,
+                universe_mode=st.session_state.universe_mode,
+                sector_allowlist=picker_sector_allow,
+                signal_lookback=st.session_state.v3_signal_lookback,
+                max_runup_pct=st.session_state.v3_max_runup_pct,
+                max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                retest_days=st.session_state.v3_retest_days,
+                max_tickers=picker_max,
+                scan_params=(picker_scan_params or {}),
+            )
+        except Exception:
+            pick_rows = []
+        opt = {}
+        for r in (pick_rows or []):
+            t = str(r.get("ticker") or "").upper().strip()
+            if not t:
+                continue
+            nm = str(r.get("name") or t).replace(".KL", "").strip()
+            opt[f"{t} - {nm}"] = t
+        selected_pick = st.multiselect("Select to pin", options=list(opt.keys()), key="watchlist_picker_selected")
+        colp1, colp2 = st.columns(2)
+        if colp1.button("Pin selected", use_container_width=True):
+            to_add = [opt[x] for x in selected_pick if x in opt]
+            if to_add:
+                manual = _uniq_tickers(st.session_state.get("manual_watchlist") or [])
+                seen = set(manual)
+                for t in to_add:
+                    if t in seen:
+                        continue
+                    seen.add(t)
+                    manual.append(t)
+                st.session_state.manual_watchlist = manual
+                _apply_watchlist(st.session_state.get("watchlist") or [])
+                _notify("success", f"Pinned {len(to_add)} tickers to My Watchlist.")
+                st.rerun()
+            else:
+                _notify("info", "No tickers selected.")
+        manual_now = _uniq_tickers(st.session_state.get("manual_watchlist") or [])
+        remove_sel = st.multiselect("Remove from My Watchlist", options=list(manual_now), key="watchlist_remove_selected")
+        if colp2.button("Remove selected", use_container_width=True):
+            if remove_sel:
+                keep = [t for t in manual_now if t not in set(remove_sel)]
+                st.session_state.manual_watchlist = keep
+                _apply_watchlist(st.session_state.get("watchlist") or [])
+                _notify("success", f"Removed {len(remove_sel)} tickers from My Watchlist.")
+                st.rerun()
+            else:
+                _notify("info", "No tickers selected.")
     try:
         st.sidebar.caption(
             f"Manual: {len(_uniq_tickers(st.session_state.get('manual_watchlist') or []))} | "
@@ -1348,7 +1425,7 @@ if not popup_mode:
         st.rerun()
 
 # --- MAIN DASHBOARD TABS ---
-tab_stocks, tab_futures, tab_news = st.tabs(["📊 Stock Breakouts", "⛓️ Futures Monitoring", "📰 News & Trends"])
+tab_stocks, tab_watch, tab_futures, tab_news = st.tabs(["📊 Stock Breakouts", "⭐ My Watchlist", "⛓️ Futures Monitoring", "📰 News & Trends"])
 
 with tab_stocks:
     data_rows = []
@@ -1725,6 +1802,103 @@ with tab_stocks:
             st.caption("Watchlist is empty. Try switching universe, clicking 'Refresh Market Discovery', or resetting to the top list.")
         st.caption("If this stays 0, Yahoo data may be blocked/rate-limited in your environment. Try again later, reduce scan size, or switch to a smaller universe (KLCI/Top100).")
         st.caption("Optional fallback: set BURSA_PRICE_API_BASE_URL and BURSA_PRICE_API_KEY in your environment to use a non-Yahoo data source.")
+
+with tab_watch:
+    pinned = _uniq_tickers(st.session_state.get("manual_watchlist") or [])
+    if not pinned:
+        st.info("My Watchlist is empty. Use the sidebar → “⭐ Build My Watchlist” to pin tickers.")
+    else:
+        bench2 = None
+        try:
+            bench2, _ = _cached_stock_data("^KLSE", period="1y")
+        except Exception:
+            bench2 = None
+
+        rows = []
+        show_models = st.multiselect("Models to show", ["V3", "V2", "V1"], default=["V3", "V2", "V1"], key="watchlist_models_show")
+        for t in pinned:
+            df, nm0 = _cached_stock_data(t, period="1y")
+            if df is None or df.empty:
+                rows.append({"Ticker": t, "Name": t, "Last Price (RM)": "", "V3": "No data", "V2": "No data", "V1": "No data"})
+                continue
+            try:
+                last_px = float(df["Close"].iloc[-1])
+            except Exception:
+                last_px = None
+            try:
+                _, resolved_name, _, _, _ = _core._resolve_insight_v3(str(t), nm0)
+            except Exception:
+                resolved_name = nm0 or t
+
+            v1_sig = ""
+            v2_sig = ""
+            v3_sig = ""
+
+            if "V1" in show_models:
+                r1 = analyze_breakout(t, df, resolved_name)
+                if not r1:
+                    v1_sig = "👀 WATCH"
+                else:
+                    sc = int(r1.get("score", 0))
+                    pseudo_breakout = bool(sc >= 4)
+                    rr = dict(r1)
+                    rr["breakout_55"] = pseudo_breakout
+                    rr["watch_only"] = not pseudo_breakout
+                    v1_sig = _signal_text_for_row(rr) or ("👀 WATCH" if rr.get("watch_only") else "")
+
+            if "V2" in show_models:
+                r2 = analyze_breakout_v2(t, df, resolved_name, benchmark_df=bench2, min_rows=min(120, len(df)))
+                if not r2:
+                    v2_sig = "👀 WATCH"
+                else:
+                    rr = dict(r2)
+                    rr["watch_only"] = not bool(rr.get("breakout_55"))
+                    v2_sig = _signal_text_for_row(rr) or ("� WATCH" if rr.get("watch_only") else "")
+
+            if "V3" in show_models:
+                r3 = analyze_breakout_v3(
+                    t,
+                    df,
+                    resolved_name,
+                    benchmark_df=bench2,
+                    min_rows=min(120, len(df)),
+                    signal_lookback=st.session_state.v3_signal_lookback,
+                    max_runup_pct=st.session_state.v3_max_runup_pct,
+                    max_pullback_pct=st.session_state.v3_max_pullback_pct,
+                    retest_days=st.session_state.v3_retest_days,
+                    **_v3_params_for_model("v3"),
+                )
+                if not r3:
+                    v3_sig = "👀 WATCH"
+                else:
+                    rr = dict(r3)
+                    has_any = bool(rr.get("retest_confirmed")) or bool(rr.get("breakout_candle_valid")) or bool(rr.get("near_breakout")) or bool(rr.get("breakout_55")) or bool(rr.get("breakout_candle"))
+                    rr["watch_only"] = not has_any
+                    v3_sig = _signal_text_for_row(rr) or ("� WATCH" if rr.get("watch_only") else "")
+
+            ticker_q = quote(str(t))
+            try:
+                auth_tok = st.session_state.get("auth_token")
+            except Exception:
+                auth_tok = None
+            link = f"?chart={ticker_q}&popup=1&auth={quote(str(auth_tok))}" if auth_tok else f"?chart={ticker_q}&popup=1"
+            linked_name = f'<a href="{link}" target="_blank" rel="noopener noreferrer">{str(resolved_name).replace(".KL","").strip()}</a>'
+            row = {
+                "Ticker": t,
+                "Name": linked_name,
+                "Last Price (RM)": "" if last_px is None else f"{float(last_px):.2f}",
+            }
+            if "V3" in show_models:
+                row["V3"] = v3_sig
+            if "V2" in show_models:
+                row["V2"] = v2_sig
+            if "V1" in show_models:
+                row["V1"] = v1_sig
+            rows.append(row)
+
+        dfw = pd.DataFrame(rows)
+        st.caption("Tip: click the Name to open its chart in a new window/tab.")
+        st.markdown(dfw.to_html(escape=False, index=False), unsafe_allow_html=True)
 
 with tab_futures:
     st.markdown("### ⛓️ Malaysian Futures Dashboard")
