@@ -784,6 +784,7 @@ def _apply_watchlist(scanned=None):
     scan = _uniq_tickers(scanned or [])
     st.session_state.manual_watchlist = manual
     st.session_state.watchlist = _uniq_tickers(manual + scan)
+    _save_state_if_changed()
 
 def _v3_params_for_model(model_key: str) -> dict:
     try:
