@@ -282,6 +282,109 @@ def _load_universe_from_csv(path: str) -> list[str]:
     return uniq
 
 
+def _find_company_list_xlsx_files() -> list[Path]:
+    try:
+        patterns = [
+            "List_of_Companies*.xlsx",
+            "list_of_companies*.xlsx",
+            "companies*.xlsx",
+        ]
+        out: list[Path] = []
+        for pat in patterns:
+            out.extend(sorted(APP_DIR.glob(pat)))
+        seen = set()
+        uniq: list[Path] = []
+        for p in out:
+            rp = str(p.resolve())
+            if rp in seen:
+                continue
+            seen.add(rp)
+            uniq.append(p)
+        return uniq
+    except Exception:
+        return []
+
+
+def _load_universe_from_xlsx(path: Path) -> list[str]:
+    try:
+        if not path.exists():
+            return []
+        with zipfile.ZipFile(path, "r") as z:
+            shared: list[str] = []
+            try:
+                ss = z.read("xl/sharedStrings.xml")
+                root = ET.fromstring(ss)
+                ns = ""
+                if root.tag.startswith("{"):
+                    ns = root.tag.split("}")[0] + "}"
+                for si in root.findall(f".//{ns}si"):
+                    texts = []
+                    for t in si.findall(f".//{ns}t"):
+                        if t.text:
+                            texts.append(t.text)
+                    shared.append("".join(texts))
+            except Exception:
+                shared = []
+
+            sheet_xml = None
+            for name in ["xl/worksheets/sheet1.xml", "xl/worksheets/sheet0.xml"]:
+                try:
+                    sheet_xml = z.read(name)
+                    break
+                except Exception:
+                    sheet_xml = None
+            if sheet_xml is None:
+                try:
+                    names = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
+                    names.sort()
+                    if names:
+                        sheet_xml = z.read(names[0])
+                except Exception:
+                    sheet_xml = None
+            if sheet_xml is None:
+                return []
+
+            root = ET.fromstring(sheet_xml)
+            ns = ""
+            if root.tag.startswith("{"):
+                ns = root.tag.split("}")[0] + "}"
+
+            out: list[str] = []
+            for c in root.findall(f".//{ns}c"):
+                r = c.attrib.get("r") or ""
+                if not r.startswith("D"):
+                    continue
+                v = c.find(f"{ns}v")
+                if v is None or v.text is None:
+                    continue
+                raw = v.text.strip()
+                if not raw:
+                    continue
+                if (c.attrib.get("t") or "").strip().lower() == "s":
+                    try:
+                        idx = int(raw)
+                        raw = shared[idx] if 0 <= idx < len(shared) else ""
+                    except Exception:
+                        raw = ""
+                raw = str(raw).strip()
+                if not raw:
+                    continue
+                code = raw.replace(".KL", "").strip()
+                if code.isdigit() and 1 <= len(code) <= 4:
+                    out.append(f"{code.zfill(4)}.KL")
+
+            seen = set()
+            uniq = []
+            for x in out:
+                if x in seen:
+                    continue
+                seen.add(x)
+                uniq.append(x)
+            return uniq
+    except Exception:
+        return []
+
+
 def get_stock_universe(mode: str = "curated") -> tuple[list[str], str]:
     """
     Returns (tickers, source_label).
@@ -312,6 +415,19 @@ def get_stock_universe(mode: str = "curated") -> tuple[list[str], str]:
 
     if m in {"file", "full", "all"}:
         u = _load_universe_from_csv(BURSA_UNIVERSE_FILE)
+        try:
+            xls = []
+            for p in _find_company_list_xlsx_files():
+                xls.extend(_load_universe_from_xlsx(p))
+            if xls:
+                seen = set(u)
+                for t in xls:
+                    if t in seen:
+                        continue
+                    seen.add(t)
+                    u.append(t)
+        except Exception:
+            pass
         return (u, "file") if u else (list(STOCK_DISCOVERY_UNIVERSE), "file-fallback")
 
     if m in {"auto", "malaysia", "my"}:

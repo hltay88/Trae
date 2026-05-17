@@ -802,7 +802,7 @@ def _scan_params_for_model(model_key: str) -> dict:
 def _ui_get_top_breakouts(limit: int, no_cache: bool = False):
     scan_params = _scan_params_for_model(st.session_state.breakout_model)
     sector_allow = (st.session_state.sector_focus or None) if st.session_state.breakout_model in {"v3"} else None
-    max_tickers = st.session_state.max_tickers_scan if st.session_state.universe_mode == "auto" else None
+    max_tickers = st.session_state.max_tickers_scan if st.session_state.universe_mode in {"auto", "file"} else None
     if no_cache:
         try:
             _cached_top_breakouts.clear()
@@ -932,8 +932,11 @@ if not popup_mode:
     # Index constituent lists (KLCI/FBM70/FBM100/etc.) auto-refresh in the background.
     # Manual update/force-refresh controls are intentionally hidden to keep the UI simple.
 
-    if st.session_state.universe_mode == "auto":
-        st.sidebar.caption("Auto universe downloads & caches a Malaysia stock list; the first run may take longer.")
+    if st.session_state.universe_mode in {"auto", "file"}:
+        if st.session_state.universe_mode == "auto":
+            st.sidebar.caption("Auto universe downloads & caches a Malaysia stock list; the first run may take longer.")
+        else:
+            st.sidebar.caption("From File (Full) loads bursa_universe.csv (one 4-digit code per line, example: 6742 or 6742.KL) and will also auto-include any List_of_Companies*.xlsx in the app folder (Column D = stock code).")
         max_scan = st.sidebar.slider("Max tickers to scan", min_value=50, max_value=1200, value=int(st.session_state.max_tickers_scan), step=50)
         if int(max_scan) != int(st.session_state.max_tickers_scan):
             st.session_state.max_tickers_scan = int(max_scan)
@@ -945,8 +948,6 @@ if not popup_mode:
                     fallback_universe, _ = get_stock_universe(st.session_state.universe_mode)
                     _apply_watchlist(list(fallback_universe[:top_n]))
             st.rerun()
-    if st.session_state.universe_mode == "file":
-        st.sidebar.caption("Universe source: bursa_universe.csv in the app folder. Put one 4-digit stock code per line (Main + ACE). Example: 6742 or 6742.KL.")
 
     st.sidebar.toggle(
         "Show indicator columns (MACD/ATR/Vol)",
